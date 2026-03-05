@@ -2,6 +2,7 @@ import unittest
 
 from metacritic_scraper_py.cli import (
     _convert_setting_value,
+    _interactive_banner_lines,
     _interactive_defaults,
     _parse_bool,
     _run_interactive_command,
@@ -42,6 +43,41 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(keep_running)
         self.assertTrue(output)
         self.assertIn("交互命令（中文释义）", output[0])
+
+    def test_clear_command_not_available_by_default(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        keep_running = _run_interactive_command(["clear"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertTrue(output)
+        self.assertIn("Unknown command: clear", output[0])
+
+    def test_clear_command_invokes_clear_callback_when_enabled(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        cleared = {"value": False}
+
+        def _clear() -> None:
+            cleared["value"] = True
+
+        keep_running = _run_interactive_command(
+            ["clear"],
+            settings,
+            output.append,
+            include_clear=True,
+            clear_output=_clear,
+        )
+
+        self.assertTrue(keep_running)
+        self.assertTrue(cleared["value"])
+        self.assertEqual(output, [])
+
+    def test_interactive_banner_lines(self) -> None:
+        lines = _interactive_banner_lines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("Metacritic Scraper Interactive Shell", lines[0])
+        self.assertIn("Type 'help' to see commands.", lines[1])
 
 
 if __name__ == "__main__":

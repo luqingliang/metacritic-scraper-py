@@ -320,59 +320,68 @@ def _convert_setting_value(key: str, raw_value: str) -> object:
     raise KeyError(f"unknown setting key: {key}")
 
 
-def _print_interactive_help() -> str:
-    return "\n".join(
-        [
-            "Interactive commands:",
-            "  help                              Show help",
-            "  help-zh | 帮助                    Show Chinese annotated help",
-            "  show                              Show current session settings",
-            "  set <key> <value>                 Update setting (use 'none' for null)",
-            "  reset                             Reset settings to defaults",
-            "  crawl                             Run crawl with current settings",
-            "  crawl-one <slug>                  Crawl one game with current settings",
-            "  slugs [output_path]               Print slugs or save to a file",
-            "  export-excel [output_path]        Export DB data to Excel",
-            "  exit | quit                       Exit interactive shell",
-            "",
-            "Examples:",
-            "  set db data/metacritic.db",
-            "  set include_reviews true",
-            "  set concurrency 4",
-            "  set incremental_by_date true",
-            "  crawl",
-            "  crawl-one the-legend-of-zelda-breath-of-the-wild",
-        ]
-    )
+def _print_interactive_help(include_clear: bool = False) -> str:
+    lines = [
+        "Interactive commands:",
+        "  help                              Show help",
+        "  help-zh | 帮助                    Show Chinese annotated help",
+        "  show                              Show current session settings",
+        "  set <key> <value>                 Update setting (use 'none' for null)",
+        "  reset                             Reset settings to defaults",
+        "  crawl                             Run crawl with current settings",
+        "  crawl-one <slug>                  Crawl one game with current settings",
+        "  slugs [output_path]               Print slugs or save to a file",
+        "  export-excel [output_path]        Export DB data to Excel",
+        "  exit | quit                       Exit interactive shell",
+        "",
+        "Examples:",
+        "  set db data/metacritic.db",
+        "  set include_reviews true",
+        "  set concurrency 4",
+        "  set incremental_by_date true",
+        "  crawl",
+        "  crawl-one the-legend-of-zelda-breath-of-the-wild",
+    ]
+    if include_clear:
+        lines.insert(3, "  clear                             Clear screen output")
+    return "\n".join(lines)
 
 
-def _print_interactive_help_zh() -> str:
-    return "\n".join(
-        [
-            "交互命令（中文释义）:",
-            "  help                              显示英文帮助",
-            "  help-zh | 帮助                    显示中文释义帮助",
-            "  show                              显示当前会话配置",
-            "  set <key> <value>                 修改配置（null/none 表示空值）",
-            "  reset                             重置为默认配置",
-            "  crawl                             用当前配置执行批量抓取",
-            "  crawl-one <slug>                  抓取单个游戏",
-            "  slugs [output_path]               打印 slug 或写入文件",
-            "  export-excel [output_path]        导出 SQLite 数据到 Excel",
-            "  exit | quit                       退出交互模式",
-            "",
-            "示例:",
-            "  help-zh",
-            "  set include_reviews true",
-            "  set concurrency 4",
-            "  crawl",
-            "  export-excel data/metacritic_export.xlsx",
-        ]
-    )
+def _print_interactive_help_zh(include_clear: bool = False) -> str:
+    lines = [
+        "交互命令（中文释义）:",
+        "  help                              显示英文帮助",
+        "  help-zh | 帮助                    显示中文释义帮助",
+        "  show                              显示当前会话配置",
+        "  set <key> <value>                 修改配置（null/none 表示空值）",
+        "  reset                             重置为默认配置",
+        "  crawl                             用当前配置执行批量抓取",
+        "  crawl-one <slug>                  抓取单个游戏",
+        "  slugs [output_path]               打印 slug 或写入文件",
+        "  export-excel [output_path]        导出 SQLite 数据到 Excel",
+        "  exit | quit                       退出交互模式",
+        "",
+        "示例:",
+        "  help-zh",
+        "  set include_reviews true",
+        "  set concurrency 4",
+        "  crawl",
+        "  export-excel data/metacritic_export.xlsx",
+    ]
+    if include_clear:
+        lines.insert(3, "  clear                             清屏")
+    return "\n".join(lines)
 
 
 def _format_settings(settings: dict[str, object]) -> str:
     return "\n".join(f"{key}={settings[key]}" for key in sorted(settings))
+
+
+def _interactive_banner_lines() -> list[str]:
+    return [
+        "Metacritic Scraper Interactive Shell",
+        "Type 'help' to see commands. Press Ctrl-C/Ctrl-D to exit.",
+    ]
 
 
 def _run_with_captured_stdout(
@@ -393,6 +402,8 @@ def _run_interactive_command(
     tokens: list[str],
     settings: dict[str, object],
     emit: Callable[[str], None],
+    include_clear: bool = False,
+    clear_output: Callable[[], None] | None = None,
 ) -> bool:
     cmd = tokens[0].lower()
     args = tokens[1:]
@@ -401,12 +412,16 @@ def _run_interactive_command(
         return False
     if cmd in {"help", "h", "?"}:
         if args and args[0].lower() in {"zh", "cn"}:
-            emit(_print_interactive_help_zh())
+            emit(_print_interactive_help_zh(include_clear=include_clear))
         else:
-            emit(_print_interactive_help())
+            emit(_print_interactive_help(include_clear=include_clear))
         return True
     if cmd in {"help-zh", "help_cn", "help-cn", "帮助"}:
-        emit(_print_interactive_help_zh())
+        emit(_print_interactive_help_zh(include_clear=include_clear))
+        return True
+    if include_clear and cmd in {"clear", "cls"}:
+        if clear_output is not None:
+            clear_output()
         return True
     if cmd in {"show", "config"}:
         emit(_format_settings(settings))
@@ -582,6 +597,12 @@ def run_interactive() -> int:
         output_box.text = "\n".join(output_lines)
         output_box.buffer.cursor_position = len(output_box.text)
 
+    def clear_output() -> None:
+        output_lines.clear()
+        output_lines.extend(_interactive_banner_lines())
+        output_box.text = "\n".join(output_lines)
+        output_box.buffer.cursor_position = len(output_box.text)
+
     kb = KeyBindings()
 
     @kb.add("enter")
@@ -596,7 +617,13 @@ def run_interactive() -> int:
         except ValueError as exc:
             append_output(f"Invalid input: {exc}")
             return
-        if not _run_interactive_command(tokens, settings, append_output):
+        if not _run_interactive_command(
+            tokens,
+            settings,
+            append_output,
+            include_clear=True,
+            clear_output=clear_output,
+        ):
             event.app.exit(result=0)
 
     @kb.add("c-c")
@@ -634,8 +661,8 @@ def run_interactive() -> int:
     root_logger.addHandler(ui_handler)
     root_logger.setLevel(previous_level)
 
-    append_output("Metacritic Scraper Interactive Shell")
-    append_output("Type 'help' to see commands. Press Ctrl-C/Ctrl-D to exit.")
+    for banner_line in _interactive_banner_lines():
+        append_output(banner_line)
 
     try:
         result = app.run()
