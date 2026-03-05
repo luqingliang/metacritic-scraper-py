@@ -325,6 +325,7 @@ def _print_interactive_help() -> str:
         [
             "Interactive commands:",
             "  help                              Show help",
+            "  help-zh | 帮助                    Show Chinese annotated help",
             "  show                              Show current session settings",
             "  set <key> <value>                 Update setting (use 'none' for null)",
             "  reset                             Reset settings to defaults",
@@ -341,6 +342,31 @@ def _print_interactive_help() -> str:
             "  set incremental_by_date true",
             "  crawl",
             "  crawl-one the-legend-of-zelda-breath-of-the-wild",
+        ]
+    )
+
+
+def _print_interactive_help_zh() -> str:
+    return "\n".join(
+        [
+            "交互命令（中文释义）:",
+            "  help                              显示英文帮助",
+            "  help-zh | 帮助                    显示中文释义帮助",
+            "  show                              显示当前会话配置",
+            "  set <key> <value>                 修改配置（null/none 表示空值）",
+            "  reset                             重置为默认配置",
+            "  crawl                             用当前配置执行批量抓取",
+            "  crawl-one <slug>                  抓取单个游戏",
+            "  slugs [output_path]               打印 slug 或写入文件",
+            "  export-excel [output_path]        导出 SQLite 数据到 Excel",
+            "  exit | quit                       退出交互模式",
+            "",
+            "示例:",
+            "  help-zh",
+            "  set include_reviews true",
+            "  set concurrency 4",
+            "  crawl",
+            "  export-excel data/metacritic_export.xlsx",
         ]
     )
 
@@ -374,7 +400,13 @@ def _run_interactive_command(
     if cmd in {"exit", "quit"}:
         return False
     if cmd in {"help", "h", "?"}:
-        emit(_print_interactive_help())
+        if args and args[0].lower() in {"zh", "cn"}:
+            emit(_print_interactive_help_zh())
+        else:
+            emit(_print_interactive_help())
+        return True
+    if cmd in {"help-zh", "help_cn", "help-cn", "帮助"}:
+        emit(_print_interactive_help_zh())
         return True
     if cmd in {"show", "config"}:
         emit(_format_settings(settings))

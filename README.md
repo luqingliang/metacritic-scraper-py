@@ -49,6 +49,7 @@ Inside interactive shell:
 
 ```text
 show
+help-zh
 set db data/metacritic.db
 set include_reviews true
 set concurrency 4
