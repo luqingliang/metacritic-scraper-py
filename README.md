@@ -50,12 +50,27 @@ Inside interactive shell:
 ```text
 show
 help-zh
+show-zh
 set db data/metacritic.db
-set include_reviews true
 set concurrency 4
 crawl
 export-excel data/metacritic_export.xlsx
 exit
+```
+
+## Quick-Start Defaults
+
+For easier out-of-box usage, `crawl` and interactive mode now use a quick-start profile by default:
+
+- `include_reviews = true`
+- `max_review_pages = 1`
+- `max_games = 50`
+
+This means your first run already contains review data but stays bounded in runtime.
+You can still override defaults, for example:
+
+```bash
+metacritic-scraper crawl --max-games 200 --max-review-pages 3 --no-include-reviews
 ```
 
 2) Crawl one game:

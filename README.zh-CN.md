@@ -50,12 +50,27 @@ metacritic-scraper
 ```text
 show
 help-zh
+show-zh
 set db data/metacritic.db
-set include_reviews true
 set concurrency 4
 crawl
 export-excel data/metacritic_export.xlsx
 exit
+```
+
+## 开箱默认配置
+
+为了更利于上手，`crawl` 和交互模式默认使用“快速上手配置”：
+
+- `include_reviews = true`
+- `max_review_pages = 1`
+- `max_games = 50`
+
+这样首次运行就会包含评论数据，同时任务时长也有上限。
+如需覆盖默认值，可显式指定，例如：
+
+```bash
+metacritic-scraper crawl --max-games 200 --max-review-pages 3 --no-include-reviews
 ```
 
 2) 抓取单个游戏：
