@@ -41,6 +41,10 @@ metacritic-scraper
 # 或：metacritic-scraper interactive
 ```
 
+交互界面为“底部固定输入框（`metacritic>`）+ 上方可滚动输出区”。
+按 `Enter` 执行命令，按 `Ctrl-C`/`Ctrl-D` 退出。
+当会话不是 TTY（例如通过管道输入）时，会自动回退到普通 REPL 模式。
+
 在交互模式里可直接输入：
 
 ```text

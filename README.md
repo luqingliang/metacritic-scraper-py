@@ -41,6 +41,10 @@ metacritic-scraper
 # or: metacritic-scraper interactive
 ```
 
+Interactive UI uses a fixed bottom input box (`metacritic>`) and a scrollable output pane above it.
+Press `Enter` to run a command, `Ctrl-C`/`Ctrl-D` to exit.
+If the session is not a TTY (for example piped input), it automatically falls back to plain REPL mode.
+
 Inside interactive shell:
 
 ```text

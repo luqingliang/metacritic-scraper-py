@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import io
 import logging
 import shlex
+import sys
+from contextlib import redirect_stdout
 from datetime import date
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .client import MetacriticClient
 from .config import (
@@ -317,35 +320,179 @@ def _convert_setting_value(key: str, raw_value: str) -> object:
     raise KeyError(f"unknown setting key: {key}")
 
 
-def _print_interactive_help() -> None:
-    print(
-        "\n".join(
-            [
-                "Interactive commands:",
-                "  help                              Show help",
-                "  show                              Show current session settings",
-                "  set <key> <value>                 Update setting (use 'none' for null)",
-                "  reset                             Reset settings to defaults",
-                "  crawl                             Run crawl with current settings",
-                "  crawl-one <slug>                  Crawl one game with current settings",
-                "  slugs [output_path]               Print slugs or save to a file",
-                "  export-excel [output_path]        Export DB data to Excel",
-                "  exit | quit                       Exit interactive shell",
-                "",
-                "Examples:",
-                "  set db data/metacritic.db",
-                "  set include_reviews true",
-                "  set concurrency 4",
-                "  set incremental_by_date true",
-                "  crawl",
-                "  crawl-one the-legend-of-zelda-breath-of-the-wild",
-            ]
-        )
+def _print_interactive_help() -> str:
+    return "\n".join(
+        [
+            "Interactive commands:",
+            "  help                              Show help",
+            "  show                              Show current session settings",
+            "  set <key> <value>                 Update setting (use 'none' for null)",
+            "  reset                             Reset settings to defaults",
+            "  crawl                             Run crawl with current settings",
+            "  crawl-one <slug>                  Crawl one game with current settings",
+            "  slugs [output_path]               Print slugs or save to a file",
+            "  export-excel [output_path]        Export DB data to Excel",
+            "  exit | quit                       Exit interactive shell",
+            "",
+            "Examples:",
+            "  set db data/metacritic.db",
+            "  set include_reviews true",
+            "  set concurrency 4",
+            "  set incremental_by_date true",
+            "  crawl",
+            "  crawl-one the-legend-of-zelda-breath-of-the-wild",
+        ]
     )
 
 
-def run_interactive() -> int:
-    settings = _interactive_defaults()
+def _format_settings(settings: dict[str, object]) -> str:
+    return "\n".join(f"{key}={settings[key]}" for key in sorted(settings))
+
+
+def _run_with_captured_stdout(
+    func: Callable[[argparse.Namespace], int],
+    namespace: argparse.Namespace,
+    emit: Callable[[str], None],
+) -> None:
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = func(namespace)
+    output = buffer.getvalue().strip()
+    if output:
+        emit(output)
+    emit(f"[done] exit_code={exit_code}")
+
+
+def _run_interactive_command(
+    tokens: list[str],
+    settings: dict[str, object],
+    emit: Callable[[str], None],
+) -> bool:
+    cmd = tokens[0].lower()
+    args = tokens[1:]
+
+    if cmd in {"exit", "quit"}:
+        return False
+    if cmd in {"help", "h", "?"}:
+        emit(_print_interactive_help())
+        return True
+    if cmd in {"show", "config"}:
+        emit(_format_settings(settings))
+        return True
+    if cmd == "reset":
+        settings.clear()
+        settings.update(_interactive_defaults())
+        emit("Settings reset.")
+        return True
+    if cmd == "set":
+        if len(args) < 2:
+            emit("Usage: set <key> <value>")
+            return True
+        key = args[0]
+        raw_value = " ".join(args[1:])
+        try:
+            value = _convert_setting_value(key, raw_value)
+            if key == "since_date" and value is not None:
+                date.fromisoformat(str(value))
+            if key == "concurrency" and int(value) < 1:
+                raise ValueError("concurrency must be >= 1")
+        except (KeyError, ValueError) as exc:
+            emit(f"Cannot set value: {exc}")
+            return True
+        settings[key] = value
+        emit(f"Updated: {key}={value}")
+        return True
+
+    try:
+        if cmd == "crawl":
+            ns = argparse.Namespace(
+                db=settings["db"],
+                max_games=settings["max_games"],
+                start_slug=settings["start_slug"],
+                limit_sitemaps=settings["limit_sitemaps"],
+                limit_slugs=settings["limit_slugs"],
+                include_reviews=settings["include_reviews"],
+                review_page_size=settings["review_page_size"],
+                max_review_pages=settings["max_review_pages"],
+                concurrency=settings["concurrency"],
+                incremental_by_date=settings["incremental_by_date"],
+                since_date=settings["since_date"],
+                lookback_days=settings["lookback_days"],
+                finder_page_size=settings["finder_page_size"],
+                incremental_state_key=settings["incremental_state_key"],
+                timeout=settings["timeout"],
+                max_retries=settings["max_retries"],
+                backoff=settings["backoff"],
+                delay=settings["delay"],
+            )
+            _run_with_captured_stdout(run_crawl, ns, emit)
+            return True
+
+        if cmd == "crawl-one":
+            if not args:
+                emit("Usage: crawl-one <slug>")
+                return True
+            slug = args[0]
+            ns = argparse.Namespace(
+                slug=slug,
+                db=settings["db"],
+                include_reviews=settings["include_reviews"],
+                review_page_size=settings["review_page_size"],
+                max_review_pages=settings["max_review_pages"],
+                timeout=settings["timeout"],
+                max_retries=settings["max_retries"],
+                backoff=settings["backoff"],
+                delay=settings["delay"],
+            )
+            _run_with_captured_stdout(run_crawl_one, ns, emit)
+            return True
+
+        if cmd == "slugs":
+            output = args[0] if args else None
+            ns = argparse.Namespace(
+                limit_sitemaps=settings["limit_sitemaps"],
+                limit_slugs=settings["limit_slugs"],
+                output=output,
+                timeout=settings["timeout"],
+                max_retries=settings["max_retries"],
+                backoff=settings["backoff"],
+                delay=settings["delay"],
+            )
+            _run_with_captured_stdout(run_slugs, ns, emit)
+            return True
+
+        if cmd == "export-excel":
+            output = args[0] if args else settings["export_output"]
+            ns = argparse.Namespace(
+                db=settings["db"],
+                output=output,
+                slug=settings["slug_filter"],
+                include_raw_json=settings["include_raw_json"],
+            )
+            _run_with_captured_stdout(run_export_excel, ns, emit)
+            return True
+
+        emit(f"Unknown command: {cmd}. Type 'help' for available commands.")
+        return True
+    except Exception as exc:  # pragma: no cover
+        emit(f"Command failed: {exc}")
+        return True
+
+
+class _InteractiveLogHandler(logging.Handler):
+    def __init__(self, emit: Callable[[str], None]) -> None:
+        super().__init__()
+        self._emit = emit
+        self.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._emit(self.format(record))
+        except Exception:  # pragma: no cover
+            return
+
+
+def _run_interactive_plain(settings: dict[str, object]) -> int:
     print("Metacritic Scraper Interactive Shell")
     print("Type 'help' to see commands.")
     while True:
@@ -356,120 +503,116 @@ def run_interactive() -> int:
             return 0
         if not line:
             continue
-
         try:
             tokens = shlex.split(line)
         except ValueError as exc:
             print(f"Invalid input: {exc}")
             continue
-
-        cmd = tokens[0].lower()
-        args = tokens[1:]
-
-        if cmd in {"exit", "quit"}:
+        if not _run_interactive_command(tokens, settings, print):
             return 0
-        if cmd in {"help", "h", "?"}:
-            _print_interactive_help()
-            continue
-        if cmd in {"show", "config"}:
-            for key in sorted(settings):
-                print(f"{key}={settings[key]}")
-            continue
-        if cmd == "reset":
-            settings = _interactive_defaults()
-            print("Settings reset.")
-            continue
-        if cmd == "set":
-            if len(args) < 2:
-                print("Usage: set <key> <value>")
-                continue
-            key = args[0]
-            raw_value = " ".join(args[1:])
-            try:
-                value = _convert_setting_value(key, raw_value)
-                if key == "since_date" and value is not None:
-                    date.fromisoformat(str(value))
-                if key == "concurrency" and int(value) < 1:
-                    raise ValueError("concurrency must be >= 1")
-            except (KeyError, ValueError) as exc:
-                print(f"Cannot set value: {exc}")
-                continue
-            settings[key] = value
-            print(f"Updated: {key}={value}")
-            continue
 
+
+def run_interactive() -> int:
+    settings = _interactive_defaults()
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return _run_interactive_plain(settings)
+
+    try:
+        from prompt_toolkit import Application
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.layout import HSplit, Layout, Window
+        from prompt_toolkit.styles import Style
+        from prompt_toolkit.widgets import Frame, TextArea
+    except Exception:
+        return _run_interactive_plain(settings)
+
+    output_lines: list[str] = []
+    max_lines = 5000
+
+    output_box = TextArea(
+        text="",
+        focusable=False,
+        scrollbar=True,
+        wrap_lines=False,
+    )
+    input_box = TextArea(
+        height=1,
+        prompt="metacritic> ",
+        multiline=False,
+        wrap_lines=False,
+    )
+
+    def append_output(message: str) -> None:
+        for line in str(message).splitlines() or [""]:
+            output_lines.append(line)
+        if len(output_lines) > max_lines:
+            del output_lines[: len(output_lines) - max_lines]
+        output_box.text = "\n".join(output_lines)
+        output_box.buffer.cursor_position = len(output_box.text)
+
+    kb = KeyBindings()
+
+    @kb.add("enter")
+    def _(event) -> None:
+        line = input_box.text.strip()
+        input_box.text = ""
+        if not line:
+            return
+        append_output(f"metacritic> {line}")
         try:
-            if cmd == "crawl":
-                ns = argparse.Namespace(
-                    db=settings["db"],
-                    max_games=settings["max_games"],
-                    start_slug=settings["start_slug"],
-                    limit_sitemaps=settings["limit_sitemaps"],
-                    limit_slugs=settings["limit_slugs"],
-                    include_reviews=settings["include_reviews"],
-                    review_page_size=settings["review_page_size"],
-                    max_review_pages=settings["max_review_pages"],
-                    concurrency=settings["concurrency"],
-                    incremental_by_date=settings["incremental_by_date"],
-                    since_date=settings["since_date"],
-                    lookback_days=settings["lookback_days"],
-                    finder_page_size=settings["finder_page_size"],
-                    incremental_state_key=settings["incremental_state_key"],
-                    timeout=settings["timeout"],
-                    max_retries=settings["max_retries"],
-                    backoff=settings["backoff"],
-                    delay=settings["delay"],
-                )
-                run_crawl(ns)
-                continue
+            tokens = shlex.split(line)
+        except ValueError as exc:
+            append_output(f"Invalid input: {exc}")
+            return
+        if not _run_interactive_command(tokens, settings, append_output):
+            event.app.exit(result=0)
 
-            if cmd == "crawl-one":
-                slug = args[0] if args else input("slug> ").strip()
-                if not slug:
-                    print("slug is required")
-                    continue
-                ns = argparse.Namespace(
-                    slug=slug,
-                    db=settings["db"],
-                    include_reviews=settings["include_reviews"],
-                    review_page_size=settings["review_page_size"],
-                    max_review_pages=settings["max_review_pages"],
-                    timeout=settings["timeout"],
-                    max_retries=settings["max_retries"],
-                    backoff=settings["backoff"],
-                    delay=settings["delay"],
-                )
-                run_crawl_one(ns)
-                continue
+    @kb.add("c-c")
+    @kb.add("c-d")
+    def _(event) -> None:
+        event.app.exit(result=0)
 
-            if cmd == "slugs":
-                output = args[0] if args else None
-                ns = argparse.Namespace(
-                    limit_sitemaps=settings["limit_sitemaps"],
-                    limit_slugs=settings["limit_slugs"],
-                    output=output,
-                    timeout=settings["timeout"],
-                    max_retries=settings["max_retries"],
-                    backoff=settings["backoff"],
-                    delay=settings["delay"],
-                )
-                run_slugs(ns)
-                continue
+    app = Application(
+        layout=Layout(
+            HSplit(
+                [
+                    Frame(output_box, title="Metacritic Scraper"),
+                    Window(height=1, char="-"),
+                    input_box,
+                ]
+            ),
+            focused_element=input_box,
+        ),
+        key_bindings=kb,
+        full_screen=True,
+        mouse_support=True,
+        style=Style.from_dict(
+            {
+                "frame.label": "bold",
+            }
+        ),
+    )
 
-            if cmd == "export-excel":
-                output = args[0] if args else settings["export_output"]
-                ns = argparse.Namespace(
-                    db=settings["db"],
-                    output=output,
-                    slug=settings["slug_filter"],
-                    include_raw_json=settings["include_raw_json"],
-                )
-                run_export_excel(ns)
-                continue
+    root_logger = logging.getLogger()
+    previous_handlers = list(root_logger.handlers)
+    previous_level = root_logger.level
+    for handler in previous_handlers:
+        root_logger.removeHandler(handler)
+    ui_handler = _InteractiveLogHandler(append_output)
+    root_logger.addHandler(ui_handler)
+    root_logger.setLevel(previous_level)
 
-            print(f"Unknown command: {cmd}. Type 'help' for available commands.")
-        except Exception as exc:  # pragma: no cover
-            print(f"Command failed: {exc}")
+    append_output("Metacritic Scraper Interactive Shell")
+    append_output("Type 'help' to see commands. Press Ctrl-C/Ctrl-D to exit.")
+
+    try:
+        result = app.run()
+        return int(result or 0)
+    finally:
+        root_logger.removeHandler(ui_handler)
+        for handler in previous_handlers:
+            root_logger.addHandler(handler)
+        root_logger.setLevel(previous_level)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
