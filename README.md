@@ -108,6 +108,17 @@ Each table stores essential normalized fields and raw JSON payloads (`*_json`) f
 
 This project is licensed under the MIT License. See [LICENSE](./LICENSE).
 
+## Roadmap
+
+- [x] Game coverage: crawl game details, critic reviews, and user reviews
+- [x] Result inspection: export to Excel for manual QA checks
+- [ ] Domain expansion: add Movies crawling
+- [ ] Domain expansion: add TV Shows crawling
+- [ ] Domain expansion: add Music crawling
+- [ ] Unified content hub: query across Games/Movies/TV/Music in one dataset
+- [ ] Rankings and trends: cross-domain score charts, popularity lists, release trends
+- [ ] Delivery layer: lightweight web viewer and scheduled exports (Excel/CSV)
+
 ## Notes
 
 - Respect target site rules and terms before large-scale crawling.
