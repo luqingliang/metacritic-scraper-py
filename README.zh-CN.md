@@ -34,13 +34,52 @@ pip install -e .
 
 ## 快速开始
 
-1) 抓取单个游戏：
+1) 启动交互模式（常驻 REPL）：
+
+```bash
+metacritic-scraper
+# 或：metacritic-scraper interactive
+```
+
+交互界面为“底部固定输入框（`metacritic>`）+ 上方可滚动输出区”。
+按 `Enter` 执行命令，按 `Ctrl-C`/`Ctrl-D` 退出。
+当会话不是 TTY（例如通过管道输入）时，会自动回退到普通 REPL 模式。
+
+在交互模式里可直接输入：
+
+```text
+show
+help-zh
+show-zh
+set db data/metacritic.db
+set concurrency 4
+crawl
+export-excel data/metacritic_export.xlsx
+exit
+```
+
+## 开箱默认配置
+
+为了更利于上手，`crawl` 和交互模式默认使用“快速上手配置”：
+
+- `include_reviews = true`
+- `max_review_pages = 1`
+- `max_games = 50`
+
+这样首次运行就会包含评论数据，同时任务时长也有上限。
+如需覆盖默认值，可显式指定，例如：
+
+```bash
+metacritic-scraper crawl --max-games 200 --max-review-pages 3 --no-include-reviews
+```
+
+2) 抓取单个游戏：
 
 ```bash
 metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild --db data/metacritic.db --include-reviews --max-review-pages 2
 ```
 
-2) 从 sitemap 抓取（示例：前 50 个游戏）：
+3) 从 sitemap 抓取（示例：前 50 个游戏）：
 
 ```bash
 metacritic-scraper crawl --max-games 50 --db data/metacritic.db --include-reviews --max-review-pages 1
@@ -52,25 +91,25 @@ metacritic-scraper crawl --max-games 50 --db data/metacritic.db --include-review
 metacritic-scraper crawl --max-games 50 --concurrency 4 --db data/metacritic.db --include-reviews
 ```
 
-3) 开启按日期增量抓取：
+4) 开启按日期增量抓取：
 
 ```bash
 metacritic-scraper crawl --incremental-by-date --db data/metacritic.db --include-reviews --max-review-pages 1
 ```
 
-4) 按指定日期进行增量抓取（覆盖检查点）：
+5) 按指定日期进行增量抓取（覆盖检查点）：
 
 ```bash
 metacritic-scraper crawl --incremental-by-date --since-date 2026-03-01 --lookback-days 2 --db data/metacritic.db
 ```
 
-5) 导出 sitemap 中的 slug：
+6) 导出 sitemap 中的 slug：
 
 ```bash
 metacritic-scraper slugs --limit-slugs 100 --output data/slugs.txt
 ```
 
-6) 导出 SQLite 数据到 Excel：
+7) 导出 SQLite 数据到 Excel：
 
 ```bash
 metacritic-scraper export-excel --db data/metacritic.db --output data/metacritic_export.xlsx
@@ -90,6 +129,7 @@ metacritic-scraper crawl --help
 metacritic-scraper crawl-one --help
 metacritic-scraper slugs --help
 metacritic-scraper export-excel --help
+metacritic-scraper interactive --help
 ```
 
 ## 增量开关说明
@@ -119,6 +159,7 @@ SQLite 表：
 - [x] 游戏数据抓取：支持游戏详情、媒体评论、用户评论的采集与导出
 - [x] 数据核查能力：支持 Excel 导出，方便人工抽样检查
 - [x] 并发抓取（可选）：支持通过 `--concurrency` 提升批量抓取速度
+- [x] 交互模式 CLI：支持常驻运行与会话级配置
 - [ ] 内容扩展：增加电影（Movies）数据抓取
 - [ ] 内容扩展：增加电视剧/节目（TV Shows）数据抓取
 - [ ] 内容扩展：增加音乐（Music）数据抓取
