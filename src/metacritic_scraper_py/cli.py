@@ -37,6 +37,12 @@ def build_parser() -> argparse.ArgumentParser:
     crawl.add_argument("--review-page-size", type=int, default=50, help="Reviews page size.")
     crawl.add_argument("--max-review-pages", type=int, default=None, help="Limit review pages per type.")
     crawl.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Optional concurrent slug workers (default: 1).",
+    )
+    crawl.add_argument(
         "--incremental-by-date",
         action="store_true",
         help="Enable incremental crawl by releaseDate (finder endpoint).",
@@ -138,6 +144,8 @@ def run_crawl(args: argparse.Namespace) -> int:
             date.fromisoformat(args.since_date)
         except ValueError as exc:
             raise SystemExit("--since-date must be in YYYY-MM-DD format") from exc
+    if args.concurrency < 1:
+        raise SystemExit("--concurrency must be >= 1")
 
     storage = SQLiteStorage(args.db)
     try:
@@ -153,6 +161,7 @@ def run_crawl(args: argparse.Namespace) -> int:
                     lookback_days=args.lookback_days,
                     finder_page_size=args.finder_page_size,
                     state_key=args.incremental_state_key,
+                    concurrency=args.concurrency,
                 )
             else:
                 result = scraper.crawl_from_sitemaps(
@@ -163,6 +172,7 @@ def run_crawl(args: argparse.Namespace) -> int:
                     start_slug=args.start_slug,
                     limit_sitemaps=args.limit_sitemaps,
                     limit_slugs=args.limit_slugs,
+                    concurrency=args.concurrency,
                 )
         logging.info(
             "crawl finished games=%d critic_reviews=%d user_reviews=%d failed=%d",

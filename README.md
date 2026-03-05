@@ -46,6 +46,12 @@ metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild --db data/me
 metacritic-scraper crawl --max-games 50 --db data/metacritic.db --include-reviews --max-review-pages 1
 ```
 
+Optional: enable concurrent workers (for example 4 workers).
+
+```bash
+metacritic-scraper crawl --max-games 50 --concurrency 4 --db data/metacritic.db --include-reviews
+```
+
 3) Crawl incrementally by release date (switch on):
 
 ```bash
@@ -112,6 +118,7 @@ This project is licensed under the MIT License. See [LICENSE](./LICENSE).
 
 - [x] Game coverage: crawl game details, critic reviews, and user reviews
 - [x] Result inspection: export to Excel for manual QA checks
+- [x] Optional concurrent crawl: speed up batch crawling with `--concurrency`
 - [ ] Domain expansion: add Movies crawling
 - [ ] Domain expansion: add TV Shows crawling
 - [ ] Domain expansion: add Music crawling

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 from datetime import date, timedelta
 from dataclasses import dataclass, field
+from typing import Iterable
 
 from .client import MetacriticClient, MetacriticClientError
 from .storage import SQLiteStorage
@@ -38,6 +40,86 @@ class MetacriticScraper:
         into.critic_reviews_saved += one.critic_reviews_saved
         into.user_reviews_saved += one.user_reviews_saved
         into.failed_slugs.extend(one.failed_slugs)
+
+    def _crawl_slugs(
+        self,
+        slugs: Iterable[str],
+        *,
+        include_reviews: bool,
+        review_page_size: int,
+        max_review_pages: int | None,
+        max_games: int | None,
+        concurrency: int,
+    ) -> CrawlResult:
+        result = CrawlResult()
+        worker_count = max(1, concurrency)
+
+        if worker_count == 1:
+            for slug in slugs:
+                one = self.crawl_slug(
+                    slug,
+                    include_reviews=include_reviews,
+                    review_page_size=review_page_size,
+                    max_review_pages=max_review_pages,
+                )
+                self._merge_result(result, one)
+                if max_games is not None and result.games_crawled >= max_games:
+                    break
+            return result
+
+        logger.info("concurrent crawl enabled, workers=%d", worker_count)
+        pending_limit = worker_count * 2
+        future_to_slug: dict[concurrent.futures.Future[CrawlResult], str] = {}
+
+        def _drain_one_completed() -> None:
+            done, _ = concurrent.futures.wait(
+                future_to_slug.keys(),
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            for future in done:
+                slug = future_to_slug.pop(future)
+                try:
+                    one = future.result()
+                except Exception as exc:  # pragma: no cover
+                    logger.error("unhandled error while crawling slug=%s: %s", slug, exc)
+                    result.failed_slugs.append(slug)
+                    continue
+                self._merge_result(result, one)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as pool:
+            for slug in slugs:
+                if max_games is not None and result.games_crawled >= max_games:
+                    break
+
+                # Keep pending futures bounded by remaining success budget so
+                # max_games remains based on successfully crawled games.
+                while (
+                    max_games is not None
+                    and future_to_slug
+                    and result.games_crawled + len(future_to_slug) >= max_games
+                ):
+                    _drain_one_completed()
+                    if result.games_crawled >= max_games:
+                        break
+                if max_games is not None and result.games_crawled >= max_games:
+                    break
+
+                future = pool.submit(
+                    self.crawl_slug,
+                    slug,
+                    include_reviews=include_reviews,
+                    review_page_size=review_page_size,
+                    max_review_pages=max_review_pages,
+                )
+                future_to_slug[future] = slug
+
+                if len(future_to_slug) >= pending_limit:
+                    _drain_one_completed()
+
+            while future_to_slug:
+                _drain_one_completed()
+
+        return result
 
     def crawl_slug(
         self,
@@ -120,32 +202,31 @@ class MetacriticScraper:
         start_slug: str | None,
         limit_sitemaps: int | None,
         limit_slugs: int | None,
+        concurrency: int = 1,
     ) -> CrawlResult:
-        result = CrawlResult()
         started = start_slug is None
 
-        for slug in self.client.iter_game_slugs(
-            limit_sitemaps=limit_sitemaps,
-            limit_slugs=limit_slugs,
-        ):
-            if not started:
-                if slug == start_slug:
-                    started = True
-                else:
-                    continue
+        def selected_slugs() -> Iterable[str]:
+            nonlocal started
+            for slug in self.client.iter_game_slugs(
+                limit_sitemaps=limit_sitemaps,
+                limit_slugs=limit_slugs,
+            ):
+                if not started:
+                    if slug == start_slug:
+                        started = True
+                    else:
+                        continue
+                yield slug
 
-            one = self.crawl_slug(
-                slug,
-                include_reviews=include_reviews,
-                review_page_size=review_page_size,
-                max_review_pages=max_review_pages,
-            )
-            self._merge_result(result, one)
-
-            if max_games is not None and result.games_crawled >= max_games:
-                break
-
-        return result
+        return self._crawl_slugs(
+            selected_slugs(),
+            include_reviews=include_reviews,
+            review_page_size=review_page_size,
+            max_review_pages=max_review_pages,
+            max_games=max_games,
+            concurrency=concurrency,
+        )
 
     def crawl_incremental_by_date(
         self,
@@ -158,8 +239,8 @@ class MetacriticScraper:
         lookback_days: int,
         finder_page_size: int,
         state_key: str,
+        concurrency: int = 1,
     ) -> CrawlResult:
-        result = CrawlResult()
         explicit_since = self._parse_iso_date(since_date)
         stored_since = self._parse_iso_date(self.storage.get_state(state_key))
         base_since = explicit_since or stored_since
@@ -176,6 +257,7 @@ class MetacriticScraper:
             logger.info("incremental mode enabled, no previous checkpoint found; running from newest downward")
 
         visited_slugs: set[str] = set()
+        selected_slugs: list[str] = []
         newest_release_date: date | None = stored_since
         offset = 0
         reached_cutoff = False
@@ -208,28 +290,30 @@ class MetacriticScraper:
                     break
 
                 visited_slugs.add(slug)
-                one = self.crawl_slug(
-                    slug,
-                    include_reviews=include_reviews,
-                    review_page_size=review_page_size,
-                    max_review_pages=max_review_pages,
-                )
-                self._merge_result(result, one)
-
-                if max_games is not None and result.games_crawled >= max_games:
+                selected_slugs.append(slug)
+                if max_games is not None and len(selected_slugs) >= max_games:
                     break
 
             if reached_cutoff:
                 logger.info("stopped incremental crawl after reaching cutoff date")
                 break
 
-            if max_games is not None and result.games_crawled >= max_games:
+            if max_games is not None and len(selected_slugs) >= max_games:
                 break
 
             next_href = finder_payload.get("links", {}).get("next", {}).get("href")
             if not next_href:
                 break
             offset += len(items)
+
+        result = self._crawl_slugs(
+            selected_slugs,
+            include_reviews=include_reviews,
+            review_page_size=review_page_size,
+            max_review_pages=max_review_pages,
+            max_games=max_games,
+            concurrency=concurrency,
+        )
 
         if newest_release_date:
             self.storage.set_state(state_key, newest_release_date.isoformat())

@@ -46,6 +46,12 @@ metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild --db data/me
 metacritic-scraper crawl --max-games 50 --db data/metacritic.db --include-reviews --max-review-pages 1
 ```
 
+可选：开启并发抓取（例如 4 个 worker）。
+
+```bash
+metacritic-scraper crawl --max-games 50 --concurrency 4 --db data/metacritic.db --include-reviews
+```
+
 3) 开启按日期增量抓取：
 
 ```bash
@@ -112,6 +118,7 @@ SQLite 表：
 
 - [x] 游戏数据抓取：支持游戏详情、媒体评论、用户评论的采集与导出
 - [x] 数据核查能力：支持 Excel 导出，方便人工抽样检查
+- [x] 并发抓取（可选）：支持通过 `--concurrency` 提升批量抓取速度
 - [ ] 内容扩展：增加电影（Movies）数据抓取
 - [ ] 内容扩展：增加电视剧/节目（TV Shows）数据抓取
 - [ ] 内容扩展：增加音乐（Music）数据抓取
