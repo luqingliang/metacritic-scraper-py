@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from .client import MetacriticClient, MetacriticClientError
+from .cover_downloader import CoverImageDownloader
 from .storage import SQLiteStorage
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,9 @@ class CrawlResult:
     games_crawled: int = 0
     critic_reviews_saved: int = 0
     user_reviews_saved: int = 0
+    covers_downloaded: int = 0
+    covers_skipped: int = 0
+    covers_failed: int = 0
     failed_slugs: list[str] = field(default_factory=list)
 
 
@@ -39,6 +43,9 @@ class MetacriticScraper:
         into.games_crawled += one.games_crawled
         into.critic_reviews_saved += one.critic_reviews_saved
         into.user_reviews_saved += one.user_reviews_saved
+        into.covers_downloaded += one.covers_downloaded
+        into.covers_skipped += one.covers_skipped
+        into.covers_failed += one.covers_failed
         into.failed_slugs.extend(one.failed_slugs)
 
     def _crawl_slugs(
@@ -50,6 +57,7 @@ class MetacriticScraper:
         max_review_pages: int | None,
         max_games: int | None,
         concurrency: int,
+        cover_downloader: CoverImageDownloader | None = None,
     ) -> CrawlResult:
         result = CrawlResult()
         worker_count = max(1, concurrency)
@@ -61,6 +69,7 @@ class MetacriticScraper:
                     include_reviews=include_reviews,
                     review_page_size=review_page_size,
                     max_review_pages=max_review_pages,
+                    cover_downloader=cover_downloader,
                 )
                 self._merge_result(result, one)
                 if max_games is not None and result.games_crawled >= max_games:
@@ -110,6 +119,7 @@ class MetacriticScraper:
                     include_reviews=include_reviews,
                     review_page_size=review_page_size,
                     max_review_pages=max_review_pages,
+                    cover_downloader=cover_downloader,
                 )
                 future_to_slug[future] = slug
 
@@ -128,6 +138,7 @@ class MetacriticScraper:
         include_reviews: bool,
         review_page_size: int,
         max_review_pages: int | None,
+        cover_downloader: CoverImageDownloader | None = None,
     ) -> CrawlResult:
         result = CrawlResult()
         logger.info("crawling slug=%s", slug)
@@ -161,6 +172,16 @@ class MetacriticScraper:
             cover_url=cover_url,
         )
         result.games_crawled += 1
+
+        if cover_downloader is not None:
+            status = cover_downloader.download(slug=slug, cover_url=cover_url)
+            if status == "downloaded":
+                result.covers_downloaded += 1
+            elif status == "skipped":
+                result.covers_skipped += 1
+            else:
+                result.covers_failed += 1
+                logger.warning("cover download failed for slug=%s url=%s", slug, cover_url)
 
         if not include_reviews:
             return result
@@ -206,6 +227,9 @@ class MetacriticScraper:
         limit_sitemaps: int | None,
         limit_slugs: int | None,
         concurrency: int = 1,
+        download_covers: bool = False,
+        covers_dir: str = "data/covers",
+        overwrite_covers: bool = False,
     ) -> CrawlResult:
         started = start_slug is None
 
@@ -222,6 +246,14 @@ class MetacriticScraper:
                         continue
                 yield slug
 
+        cover_downloader = None
+        if download_covers:
+            cover_downloader = CoverImageDownloader(
+                fetch_binary=self.client.fetch_binary,
+                output_dir=covers_dir,
+                overwrite=overwrite_covers,
+            )
+
         return self._crawl_slugs(
             selected_slugs(),
             include_reviews=include_reviews,
@@ -229,6 +261,7 @@ class MetacriticScraper:
             max_review_pages=max_review_pages,
             max_games=max_games,
             concurrency=concurrency,
+            cover_downloader=cover_downloader,
         )
 
     def crawl_incremental_by_date(
@@ -243,6 +276,9 @@ class MetacriticScraper:
         finder_page_size: int,
         state_key: str,
         concurrency: int = 1,
+        download_covers: bool = False,
+        covers_dir: str = "data/covers",
+        overwrite_covers: bool = False,
     ) -> CrawlResult:
         explicit_since = self._parse_iso_date(since_date)
         stored_since = self._parse_iso_date(self.storage.get_state(state_key))
@@ -309,6 +345,14 @@ class MetacriticScraper:
                 break
             offset += len(items)
 
+        cover_downloader = None
+        if download_covers:
+            cover_downloader = CoverImageDownloader(
+                fetch_binary=self.client.fetch_binary,
+                output_dir=covers_dir,
+                overwrite=overwrite_covers,
+            )
+
         result = self._crawl_slugs(
             selected_slugs,
             include_reviews=include_reviews,
@@ -316,6 +360,7 @@ class MetacriticScraper:
             max_review_pages=max_review_pages,
             max_games=max_games,
             concurrency=concurrency,
+            cover_downloader=cover_downloader,
         )
 
         if newest_release_date:

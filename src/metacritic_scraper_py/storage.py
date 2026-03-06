@@ -297,6 +297,31 @@ class SQLiteStorage:
             cursor = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}")
             return int(cursor.fetchone()[0])
 
+    def list_game_cover_urls(
+        self,
+        *,
+        slug: str | None = None,
+        limit: int | None = None,
+    ) -> list[tuple[str, str]]:
+        query = """
+            SELECT slug, cover_url
+            FROM games
+            WHERE cover_url IS NOT NULL AND TRIM(cover_url) != ''
+        """
+        params: list[object] = []
+        if slug:
+            query += " AND slug = ?"
+            params.append(slug)
+        query += " ORDER BY slug ASC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        with self._lock:
+            cursor = self.conn.execute(query, tuple(params))
+            rows = cursor.fetchall()
+        return [(str(row[0]), str(row[1])) for row in rows]
+
     def get_state(self, key: str) -> str | None:
         with self._lock:
             cursor = self.conn.execute(

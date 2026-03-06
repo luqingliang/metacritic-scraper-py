@@ -163,6 +163,10 @@ class MetacriticClient:
         response = self._request(url)
         return response.text
 
+    def _get_binary(self, url: str) -> bytes:
+        response = self._request(url)
+        return response.content
+
     def _get_json(self, url: str, *, params: dict | None = None) -> dict:
         response = self._request(url, params=params)
         try:
@@ -226,6 +230,9 @@ class MetacriticClient:
     ) -> str | None:
         bucket_path = cover_bucket_path_from_product(product_payload)
         return catalog_image_url_from_bucket_path(bucket_path)
+
+    def fetch_binary(self, url: str) -> bytes:
+        return self._get_binary(url)
 
     def fetch_score_summary(self, slug: str, review_type: ReviewType) -> dict:
         if review_type == "critic":

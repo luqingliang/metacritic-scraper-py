@@ -29,6 +29,9 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertEqual(_convert_setting_value("max_games", "12"), 12)
         self.assertIsNone(_convert_setting_value("since_date", "none"))
         self.assertEqual(_convert_setting_value("since_date", "2026-03-05"), "2026-03-05")
+        self.assertTrue(_convert_setting_value("download_covers", "true"))
+        self.assertFalse(_convert_setting_value("overwrite_covers", "false"))
+        self.assertEqual(_convert_setting_value("covers_dir", "data/covers"), "data/covers")
 
     def test_quickstart_defaults_for_crawl_parser(self) -> None:
         parser = build_parser()
@@ -36,6 +39,9 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(args.include_reviews)
         self.assertEqual(args.max_review_pages, DEFAULT_QUICKSTART_MAX_REVIEW_PAGES)
         self.assertEqual(args.max_games, DEFAULT_QUICKSTART_MAX_GAMES)
+        self.assertFalse(args.download_covers)
+        self.assertEqual(args.covers_dir, "data/covers")
+        self.assertFalse(args.overwrite_covers)
 
     def test_crawl_parser_can_disable_default_reviews(self) -> None:
         parser = build_parser()
@@ -47,6 +53,17 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(settings["include_reviews"])
         self.assertEqual(settings["max_review_pages"], DEFAULT_QUICKSTART_MAX_REVIEW_PAGES)
         self.assertEqual(settings["max_games"], DEFAULT_QUICKSTART_MAX_GAMES)
+        self.assertFalse(settings["download_covers"])
+        self.assertEqual(settings["covers_dir"], "data/covers")
+        self.assertFalse(settings["overwrite_covers"])
+
+    def test_download_covers_parser_defaults(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["download-covers"])
+        self.assertEqual(args.db, "data/metacritic.db")
+        self.assertEqual(args.output_dir, "data/covers")
+        self.assertIsNone(args.limit)
+        self.assertFalse(args.overwrite)
 
     def test_help_zh_command(self) -> None:
         settings = _interactive_defaults()

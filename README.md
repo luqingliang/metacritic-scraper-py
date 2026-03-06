@@ -85,6 +85,12 @@ metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild --db data/me
 metacritic-scraper crawl --max-games 50 --db data/metacritic.db --include-reviews --max-review-pages 1
 ```
 
+Optional: download cover image files while crawling (disabled by default).
+
+```bash
+metacritic-scraper crawl --max-games 50 --db data/metacritic.db --download-covers --covers-dir data/covers
+```
+
 Optional: enable concurrent workers (for example 4 workers).
 
 ```bash
@@ -109,7 +115,19 @@ metacritic-scraper crawl --incremental-by-date --since-date 2026-03-01 --lookbac
 metacritic-scraper slugs --limit-slugs 100 --output data/slugs.txt
 ```
 
-7) Export SQLite data to Excel:
+7) Batch download cover image files from already crawled games:
+
+```bash
+metacritic-scraper download-covers --db data/metacritic.db --output-dir data/covers
+```
+
+Optional: overwrite existing files or limit this run.
+
+```bash
+metacritic-scraper download-covers --db data/metacritic.db --overwrite --limit 200
+```
+
+8) Export SQLite data to Excel:
 
 ```bash
 metacritic-scraper export-excel --db data/metacritic.db --output data/metacritic_export.xlsx
@@ -128,6 +146,7 @@ metacritic-scraper --help
 metacritic-scraper crawl --help
 metacritic-scraper crawl-one --help
 metacritic-scraper slugs --help
+metacritic-scraper download-covers --help
 metacritic-scraper export-excel --help
 metacritic-scraper interactive --help
 ```
@@ -162,7 +181,7 @@ This project is licensed under the MIT License. See [LICENSE](./LICENSE).
 - [x] Optional concurrent crawl: speed up batch crawling with `--concurrency`
 - [x] Interactive CLI mode: persistent shell with session-level settings
 - [x] Cover metadata: persist `games.cover_url` from Product `bucketPath` (store URL only, no binary download)
-- [ ] Optional cover sync: add `--download-covers` to download cover files to local disk or object storage
+- [x] Optional cover sync: support downloading cover files during crawl and via `download-covers`
 - [ ] Domain expansion: add Movies crawling
 - [ ] Domain expansion: add TV Shows crawling
 - [ ] Domain expansion: add Music crawling

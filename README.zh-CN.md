@@ -85,6 +85,12 @@ metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild --db data/me
 metacritic-scraper crawl --max-games 50 --db data/metacritic.db --include-reviews --max-review-pages 1
 ```
 
+可选：在抓取游戏信息时同时下载封面图片实体（默认关闭）。
+
+```bash
+metacritic-scraper crawl --max-games 50 --db data/metacritic.db --download-covers --covers-dir data/covers
+```
+
 可选：开启并发抓取（例如 4 个 worker）。
 
 ```bash
@@ -109,7 +115,19 @@ metacritic-scraper crawl --incremental-by-date --since-date 2026-03-01 --lookbac
 metacritic-scraper slugs --limit-slugs 100 --output data/slugs.txt
 ```
 
-7) 导出 SQLite 数据到 Excel：
+7) 基于已抓取游戏信息批量下载封面图片实体：
+
+```bash
+metacritic-scraper download-covers --db data/metacritic.db --output-dir data/covers
+```
+
+可选：覆盖本地已有文件，或限制本次下载数量。
+
+```bash
+metacritic-scraper download-covers --db data/metacritic.db --overwrite --limit 200
+```
+
+8) 导出 SQLite 数据到 Excel：
 
 ```bash
 metacritic-scraper export-excel --db data/metacritic.db --output data/metacritic_export.xlsx
@@ -128,6 +146,7 @@ metacritic-scraper --help
 metacritic-scraper crawl --help
 metacritic-scraper crawl-one --help
 metacritic-scraper slugs --help
+metacritic-scraper download-covers --help
 metacritic-scraper export-excel --help
 metacritic-scraper interactive --help
 ```
@@ -162,7 +181,7 @@ SQLite 表：
 - [x] 并发抓取（可选）：支持通过 `--concurrency` 提升批量抓取速度
 - [x] 交互模式 CLI：支持常驻运行与会话级配置
 - [x] 封面元数据：写入 `games.cover_url`（由 Product `bucketPath` 组装，仅保存链接，不下载图片实体）
-- [ ] 封面文件同步（可选）：计划增加 `--download-covers`，将封面图下载到本地或对象存储
+- [x] 封面文件同步（可选）：支持在抓取时或通过 `download-covers` 命令批量下载到本地
 - [ ] 内容扩展：增加电影（Movies）数据抓取
 - [ ] 内容扩展：增加电视剧/节目（TV Shows）数据抓取
 - [ ] 内容扩展：增加音乐（Music）数据抓取

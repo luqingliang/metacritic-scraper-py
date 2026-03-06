@@ -9,6 +9,11 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - Planned: multi-domain crawling support (Movies / TV Shows / Music).
+- Optional cover image binary download during `crawl` / `crawl-one` via `--download-covers`.
+- New `download-covers` command to batch download cover image files from existing `games.cover_url`.
+
+### Changed
+- Interactive mode settings and help now include cover download controls.
 
 ## [0.1.3] - 2026-03-06
 

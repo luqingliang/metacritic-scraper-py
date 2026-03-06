@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_TIMEOUT_SECONDS,
 )
+from .cover_downloader import CoverImageDownloader
 from .exporter import export_sqlite_to_excel
 from .scraper import MetacriticScraper
 from .storage import SQLiteStorage
@@ -96,6 +97,23 @@ def build_parser() -> argparse.ArgumentParser:
     crawl.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES, help="Retry attempts.")
     crawl.add_argument("--backoff", type=float, default=DEFAULT_BACKOFF_SECONDS, help="Retry backoff base seconds.")
     crawl.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS, help="Sleep between requests.")
+    crawl.add_argument(
+        "--download-covers",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Download cover image files while crawling games (default: false).",
+    )
+    crawl.add_argument(
+        "--covers-dir",
+        default="data/covers",
+        help="Output directory for downloaded cover image files.",
+    )
+    crawl.add_argument(
+        "--overwrite-covers",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Overwrite existing cover files when downloading (default: false).",
+    )
 
     crawl_one = subparsers.add_parser("crawl-one", help="Crawl one game by slug.")
     crawl_one.add_argument("slug", help="Game slug.")
@@ -117,6 +135,23 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_one.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES, help="Retry attempts.")
     crawl_one.add_argument("--backoff", type=float, default=DEFAULT_BACKOFF_SECONDS, help="Retry backoff base seconds.")
     crawl_one.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS, help="Sleep between requests.")
+    crawl_one.add_argument(
+        "--download-covers",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Download cover image files while crawling this game (default: false).",
+    )
+    crawl_one.add_argument(
+        "--covers-dir",
+        default="data/covers",
+        help="Output directory for downloaded cover image files.",
+    )
+    crawl_one.add_argument(
+        "--overwrite-covers",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Overwrite existing cover files when downloading (default: false).",
+    )
 
     slugs = subparsers.add_parser("slugs", help="Extract game slugs from games sitemap.")
     slugs.add_argument("--limit-sitemaps", type=int, default=None, help="Read only first N sitemap files.")
@@ -147,6 +182,38 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include raw JSON columns in Excel sheets.",
     )
+
+    download_covers = subparsers.add_parser(
+        "download-covers",
+        help="Download cover image files from existing games in SQLite.",
+    )
+    download_covers.add_argument("--db", default="data/metacritic.db", help="SQLite db path.")
+    download_covers.add_argument(
+        "--output-dir",
+        default="data/covers",
+        help="Output directory for downloaded cover image files.",
+    )
+    download_covers.add_argument(
+        "--slug",
+        default=None,
+        help="Optional slug filter to download only one game's cover.",
+    )
+    download_covers.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Download at most N covers.",
+    )
+    download_covers.add_argument(
+        "--overwrite",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Overwrite existing cover files (default: false).",
+    )
+    download_covers.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS, help="HTTP timeout seconds.")
+    download_covers.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES, help="Retry attempts.")
+    download_covers.add_argument("--backoff", type=float, default=DEFAULT_BACKOFF_SECONDS, help="Retry backoff base seconds.")
+    download_covers.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS, help="Sleep between requests.")
 
     subparsers.add_parser(
         "interactive",
@@ -184,6 +251,9 @@ def run_crawl(args: argparse.Namespace) -> int:
             raise SystemExit("--since-date must be in YYYY-MM-DD format") from exc
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be >= 1")
+    download_covers = bool(getattr(args, "download_covers", False))
+    covers_dir = str(getattr(args, "covers_dir", "data/covers"))
+    overwrite_covers = bool(getattr(args, "overwrite_covers", False))
 
     storage = SQLiteStorage(args.db)
     try:
@@ -200,6 +270,9 @@ def run_crawl(args: argparse.Namespace) -> int:
                     finder_page_size=args.finder_page_size,
                     state_key=args.incremental_state_key,
                     concurrency=args.concurrency,
+                    download_covers=download_covers,
+                    covers_dir=covers_dir,
+                    overwrite_covers=overwrite_covers,
                 )
             else:
                 result = scraper.crawl_from_sitemaps(
@@ -211,12 +284,21 @@ def run_crawl(args: argparse.Namespace) -> int:
                     limit_sitemaps=args.limit_sitemaps,
                     limit_slugs=args.limit_slugs,
                     concurrency=args.concurrency,
+                    download_covers=download_covers,
+                    covers_dir=covers_dir,
+                    overwrite_covers=overwrite_covers,
                 )
         logging.info(
-            "crawl finished games=%d critic_reviews=%d user_reviews=%d failed=%d",
+            (
+                "crawl finished games=%d critic_reviews=%d user_reviews=%d "
+                "covers_downloaded=%d covers_skipped=%d covers_failed=%d failed=%d"
+            ),
             result.games_crawled,
             result.critic_reviews_saved,
             result.user_reviews_saved,
+            result.covers_downloaded,
+            result.covers_skipped,
+            result.covers_failed,
             len(result.failed_slugs),
         )
         if result.failed_slugs:
@@ -227,21 +309,41 @@ def run_crawl(args: argparse.Namespace) -> int:
 
 
 def run_crawl_one(args: argparse.Namespace) -> int:
+    download_covers = bool(getattr(args, "download_covers", False))
+    covers_dir = str(getattr(args, "covers_dir", "data/covers"))
+    overwrite_covers = bool(getattr(args, "overwrite_covers", False))
+
     storage = SQLiteStorage(args.db)
     try:
         with _build_client(args) as client:
             scraper = MetacriticScraper(client, storage)
+            cover_downloader = (
+                CoverImageDownloader(
+                    fetch_binary=client.fetch_binary,
+                    output_dir=covers_dir,
+                    overwrite=overwrite_covers,
+                )
+                if download_covers
+                else None
+            )
             result = scraper.crawl_slug(
                 args.slug,
                 include_reviews=args.include_reviews,
                 review_page_size=args.review_page_size,
                 max_review_pages=args.max_review_pages,
+                cover_downloader=cover_downloader,
             )
         logging.info(
-            "crawl-one finished games=%d critic_reviews=%d user_reviews=%d failed=%d",
+            (
+                "crawl-one finished games=%d critic_reviews=%d user_reviews=%d "
+                "covers_downloaded=%d covers_skipped=%d covers_failed=%d failed=%d"
+            ),
             result.games_crawled,
             result.critic_reviews_saved,
             result.user_reviews_saved,
+            result.covers_downloaded,
+            result.covers_skipped,
+            result.covers_failed,
             len(result.failed_slugs),
         )
         return 0 if not result.failed_slugs else 2
@@ -285,6 +387,44 @@ def run_export_excel(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_download_covers(args: argparse.Namespace) -> int:
+    if args.limit is not None and args.limit < 1:
+        raise SystemExit("--limit must be >= 1")
+
+    storage = SQLiteStorage(args.db)
+    try:
+        rows = storage.list_game_cover_urls(slug=args.slug, limit=args.limit)
+        with _build_client(args) as client:
+            downloader = CoverImageDownloader(
+                fetch_binary=client.fetch_binary,
+                output_dir=args.output_dir,
+                overwrite=args.overwrite,
+            )
+            downloaded = 0
+            skipped = 0
+            failed = 0
+            for slug, cover_url in rows:
+                status = downloader.download(slug=slug, cover_url=cover_url)
+                if status == "downloaded":
+                    downloaded += 1
+                elif status == "skipped":
+                    skipped += 1
+                else:
+                    failed += 1
+
+        logging.info(
+            "download-covers finished total=%d downloaded=%d skipped=%d failed=%d output_dir=%s",
+            len(rows),
+            downloaded,
+            skipped,
+            failed,
+            args.output_dir,
+        )
+        return 0 if failed == 0 else 2
+    finally:
+        storage.close()
+
+
 def _interactive_defaults() -> dict[str, object]:
     return {
         "db": "data/metacritic.db",
@@ -305,6 +445,9 @@ def _interactive_defaults() -> dict[str, object]:
         "max_retries": DEFAULT_MAX_RETRIES,
         "backoff": DEFAULT_BACKOFF_SECONDS,
         "delay": DEFAULT_DELAY_SECONDS,
+        "download_covers": False,
+        "covers_dir": "data/covers",
+        "overwrite_covers": False,
         "export_output": "data/metacritic_export.xlsx",
         "slug_filter": None,
         "include_raw_json": False,
@@ -321,7 +464,7 @@ def _parse_bool(raw: str) -> bool:
 
 
 def _convert_setting_value(key: str, raw_value: str) -> object:
-    bool_keys = {"include_reviews", "incremental_by_date", "include_raw_json"}
+    bool_keys = {"include_reviews", "incremental_by_date", "include_raw_json", "download_covers", "overwrite_covers"}
     int_keys = {
         "review_page_size",
         "concurrency",
@@ -344,7 +487,7 @@ def _convert_setting_value(key: str, raw_value: str) -> object:
         return None if value.lower() in {"none", "null", ""} else int(value)
     if key in optional_str_keys:
         return None if value.lower() in {"none", "null", ""} else value
-    if key in {"db", "incremental_state_key", "export_output"}:
+    if key in {"db", "incremental_state_key", "export_output", "covers_dir"}:
         return value
     raise KeyError(f"unknown setting key: {key}")
 
@@ -360,6 +503,7 @@ def _print_interactive_help(include_clear: bool = False) -> str:
         "  reset                             Reset settings to defaults",
         "  crawl                             Run crawl with current settings",
         "  crawl-one <slug>                  Crawl one game with current settings",
+        "  download-covers [output_dir]      Download cover image files from DB",
         "  slugs [output_path]               Print slugs or save to a file",
         "  export-excel [output_path]        Export DB data to Excel",
         "  exit | quit                       Exit interactive shell",
@@ -368,8 +512,10 @@ def _print_interactive_help(include_clear: bool = False) -> str:
         "  set db data/metacritic.db",
         "  set include_reviews true",
         "  set concurrency 4",
+        "  set download_covers true",
         "  set incremental_by_date true",
         "  crawl",
+        "  download-covers",
         "  crawl-one the-legend-of-zelda-breath-of-the-wild",
     ]
     if include_clear:
@@ -388,6 +534,7 @@ def _print_interactive_help_zh(include_clear: bool = False) -> str:
         "  reset                             重置为默认配置",
         "  crawl                             用当前配置执行批量抓取",
         "  crawl-one <slug>                  抓取单个游戏",
+        "  download-covers [output_dir]      基于已抓取数据下载封面图片实体",
         "  slugs [output_path]               打印 slug 或写入文件",
         "  export-excel [output_path]        导出 SQLite 数据到 Excel",
         "  exit | quit                       退出交互模式",
@@ -397,6 +544,7 @@ def _print_interactive_help_zh(include_clear: bool = False) -> str:
         "  set include_reviews true",
         "  set concurrency 4",
         "  crawl",
+        "  download-covers",
         "  export-excel data/metacritic_export.xlsx",
     ]
     if include_clear:
@@ -408,8 +556,10 @@ def _setting_explanations_en() -> dict[str, str]:
     return {
         "backoff": "Retry backoff base; larger values increase wait time growth on retries",
         "concurrency": "Number of concurrent crawl workers (1 means serial)",
+        "covers_dir": "Output directory for downloaded cover image files",
         "db": "Path to the SQLite database file",
         "delay": "Fixed delay in seconds between requests",
+        "download_covers": "Whether to download cover image files during crawl",
         "export_output": "Default output path for Excel export",
         "finder_page_size": "Page size for incremental-by-date finder mode",
         "include_raw_json": "Whether to include raw JSON columns when exporting",
@@ -422,6 +572,7 @@ def _setting_explanations_en() -> dict[str, str]:
         "max_games": "Maximum number of games to crawl in this run",
         "max_retries": "Maximum retry attempts for failed requests",
         "max_review_pages": "Maximum review pages per review type",
+        "overwrite_covers": "Whether to overwrite existing cover image files",
         "review_page_size": "Review API page size",
         "since_date": "Incremental start date in YYYY-MM-DD format",
         "slug_filter": "Optional slug filter when exporting",
@@ -442,8 +593,10 @@ def _setting_explanations_zh() -> dict[str, str]:
     return {
         "backoff": "重试退避系数，越大表示失败后等待增长更快",
         "concurrency": "并发抓取 worker 数量，1 表示串行",
+        "covers_dir": "封面图片实体下载目录",
         "db": "SQLite 数据库文件路径",
         "delay": "每次请求之间的固定等待秒数",
+        "download_covers": "抓取游戏时是否同时下载封面图片实体",
         "export_output": "导出 Excel 的默认输出路径",
         "finder_page_size": "增量模式每页抓取数量",
         "include_raw_json": "导出时是否包含原始 JSON 字段",
@@ -456,6 +609,7 @@ def _setting_explanations_zh() -> dict[str, str]:
         "max_games": "本次最多抓取的游戏数量",
         "max_retries": "请求失败后的最大重试次数",
         "max_review_pages": "每类评论最多翻页数",
+        "overwrite_covers": "下载封面时是否覆盖本地已有文件",
         "review_page_size": "评论接口每页抓取条数",
         "since_date": "增量抓取起始日期（YYYY-MM-DD）",
         "slug_filter": "导出时只过滤某个 slug",
@@ -599,6 +753,9 @@ def _run_interactive_command(
                 max_retries=settings["max_retries"],
                 backoff=settings["backoff"],
                 delay=settings["delay"],
+                download_covers=settings["download_covers"],
+                covers_dir=settings["covers_dir"],
+                overwrite_covers=settings["overwrite_covers"],
             )
             _run_with_captured_stdout(run_crawl, ns, emit)
             return True
@@ -618,8 +775,27 @@ def _run_interactive_command(
                 max_retries=settings["max_retries"],
                 backoff=settings["backoff"],
                 delay=settings["delay"],
+                download_covers=settings["download_covers"],
+                covers_dir=settings["covers_dir"],
+                overwrite_covers=settings["overwrite_covers"],
             )
             _run_with_captured_stdout(run_crawl_one, ns, emit)
+            return True
+
+        if cmd == "download-covers":
+            output_dir = args[0] if args else settings["covers_dir"]
+            ns = argparse.Namespace(
+                db=settings["db"],
+                output_dir=output_dir,
+                slug=settings["slug_filter"],
+                limit=None,
+                overwrite=settings["overwrite_covers"],
+                timeout=settings["timeout"],
+                max_retries=settings["max_retries"],
+                backoff=settings["backoff"],
+                delay=settings["delay"],
+            )
+            _run_with_captured_stdout(run_download_covers, ns, emit)
             return True
 
         if cmd == "slugs":
@@ -836,5 +1012,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_slugs(args)
     if args.command == "export-excel":
         return run_export_excel(args)
+    if args.command == "download-covers":
+        return run_download_covers(args)
     parser.error(f"unknown command: {args.command}")
     return 2

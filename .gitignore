@@ -11,3 +11,4 @@ data/*.db
 data/*.sqlite3
 data/*.xlsx
 data/*.log
+data/covers/
