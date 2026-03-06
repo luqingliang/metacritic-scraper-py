@@ -176,16 +176,16 @@ This project is licensed under the MIT License. See [LICENSE](./LICENSE).
 
 ## Roadmap
 
-- [x] Game coverage: crawl game details, critic reviews, and user reviews
-- [x] Result inspection: export to Excel for manual QA checks
-- [x] Optional concurrent crawl: speed up batch crawling with `--concurrency`
-- [x] Interactive CLI mode: persistent shell with session-level settings
-- [x] Cover metadata: persist `games.cover_url` from Product `bucketPath` (store URL only, no binary download)
-- [x] Cover binary sync (crawl-time): optional file download via `--download-covers` (default off)
-- [x] Cover binary sync (post-crawl): batch download from existing DB via `download-covers`
-- [ ] Domain expansion: add Movies crawling
-- [ ] Domain expansion: add TV Shows crawling
-- [ ] Domain expansion: add Music crawling
+- [x] Crawl game details and reviews
+- [x] Export results to Excel
+- [x] Optional concurrent crawling (`--concurrency`)
+- [x] Interactive CLI mode
+- [x] Store cover URLs in `games.cover_url`
+- [x] Optional cover download during crawl (`--download-covers`)
+- [x] Batch cover download from DB (`download-covers`)
+- [ ] Expand to Movies
+- [ ] Expand to TV Shows
+- [ ] Expand to Music
 
 ## Notes
 
