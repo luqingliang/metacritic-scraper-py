@@ -1,4 +1,6 @@
+import argparse
 import unittest
+from unittest.mock import patch
 
 from metacritic_scraper_py.cli import (
     DEFAULT_QUICKSTART_MAX_GAMES,
@@ -9,11 +11,57 @@ from metacritic_scraper_py.cli import (
     _interactive_defaults,
     _parse_bool,
     _run_interactive_command,
+    _run_with_captured_stdout,
     _style_output_line,
 )
 
 
 class InteractiveCliParsingTestCase(unittest.TestCase):
+    def test_interactive_crawl_enables_print_summary(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        captured: dict[str, object] = {}
+
+        def _fake_run_with_captured_stdout(func, namespace, emit) -> None:
+            captured["func_name"] = getattr(func, "__name__", "")
+            captured["print_summary"] = getattr(namespace, "print_summary", None)
+            emit("[done] exit_code=0")
+
+        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+            keep_running = _run_interactive_command(["crawl"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(captured.get("func_name"), "run_crawl")
+        self.assertTrue(captured.get("print_summary"))
+
+    def test_interactive_crawl_one_enables_print_summary(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        captured: dict[str, object] = {}
+
+        def _fake_run_with_captured_stdout(func, namespace, emit) -> None:
+            captured["func_name"] = getattr(func, "__name__", "")
+            captured["print_summary"] = getattr(namespace, "print_summary", None)
+            emit("[done] exit_code=0")
+
+        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+            keep_running = _run_interactive_command(["crawl-one", "demo-game"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(captured.get("func_name"), "run_crawl_one")
+        self.assertTrue(captured.get("print_summary"))
+
+    def test_run_with_captured_stdout_streams_lines(self) -> None:
+        output: list[str] = []
+
+        def _func(_: argparse.Namespace) -> int:
+            print("line-1")
+            print("line-2")
+            return 0
+
+        _run_with_captured_stdout(_func, argparse.Namespace(), output.append)
+        self.assertEqual(output, ["line-1", "line-2", "[done] exit_code=0"])
+
     def test_parse_bool(self) -> None:
         self.assertTrue(_parse_bool("true"))
         self.assertTrue(_parse_bool("YES"))
@@ -157,6 +205,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         self.assertIn("Metacritic Scraper Interactive Shell", lines[0])
         self.assertIn("Type 'help' to see commands.", lines[1])
+        self.assertIn("PgUp/PgDn", lines[1])
 
     def test_style_output_line_for_settings(self) -> None:
         fragments = _style_output_line("db = data/metacritic.db  # Path to the SQLite database file")
@@ -170,6 +219,47 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
                 ("class:settings.comment", "Path to the SQLite database file"),
             ],
         )
+
+    def test_style_output_line_for_summary(self) -> None:
+        fragments = _style_output_line(
+            "crawl summary: games=3 critic_reviews=10 user_reviews=8 covers_downloaded=2 failed=0"
+        )
+        self.assertEqual(
+            fragments,
+            [
+                ("class:summary.label", "crawl summary:"),
+                ("", " "),
+                ("class:summary.key", "games"),
+                ("", "="),
+                ("class:summary.value", "3"),
+                ("", " "),
+                ("class:summary.key", "critic_reviews"),
+                ("", "="),
+                ("class:summary.value", "10"),
+                ("", " "),
+                ("class:summary.key", "user_reviews"),
+                ("", "="),
+                ("class:summary.value", "8"),
+                ("", " "),
+                ("class:summary.key", "covers_downloaded"),
+                ("", "="),
+                ("class:summary.value", "2"),
+                ("", " "),
+                ("class:summary.key", "failed"),
+                ("", "="),
+                ("class:summary.value", "0"),
+            ],
+        )
+
+    def test_style_output_line_for_warning_log(self) -> None:
+        line = "2026-03-06 12:00:00 WARNING metacritic_scraper_py.scraper - failed slugs: demo"
+        fragments = _style_output_line(line)
+        self.assertEqual(fragments, [("class:log.warning", line)])
+
+    def test_style_output_line_for_cover_download_log(self) -> None:
+        line = "2026-03-06 12:00:00 INFO metacritic_scraper_py.cli - download-covers finished total=20 downloaded=18 skipped=2 failed=0 output_dir=data/covers"
+        fragments = _style_output_line(line)
+        self.assertEqual(fragments, [("class:log.cover", line)])
 
     def test_style_output_line_for_non_settings(self) -> None:
         fragments = _style_output_line("Unknown command: clear. Type 'help' for available commands.")
