@@ -12,6 +12,7 @@ from metacritic_scraper_py.cli import (
     _parse_bool,
     _run_interactive_command,
     _run_with_captured_stdout,
+    _style_output_text,
     _style_output_line,
 )
 
@@ -180,32 +181,12 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(output)
         self.assertIn("Unknown command: clear", output[0])
 
-    def test_clear_command_invokes_clear_callback_when_enabled(self) -> None:
-        settings = _interactive_defaults()
-        output: list[str] = []
-        cleared = {"value": False}
-
-        def _clear() -> None:
-            cleared["value"] = True
-
-        keep_running = _run_interactive_command(
-            ["clear"],
-            settings,
-            output.append,
-            include_clear=True,
-            clear_output=_clear,
-        )
-
-        self.assertTrue(keep_running)
-        self.assertTrue(cleared["value"])
-        self.assertEqual(output, [])
-
     def test_interactive_banner_lines(self) -> None:
         lines = _interactive_banner_lines()
         self.assertEqual(len(lines), 2)
         self.assertIn("Metacritic Scraper Interactive Shell", lines[0])
         self.assertIn("Type 'help' to see commands.", lines[1])
-        self.assertIn("PgUp/PgDn", lines[1])
+        self.assertIn("Output streams to terminal.", lines[1])
 
     def test_style_output_line_for_settings(self) -> None:
         fragments = _style_output_line("db = data/metacritic.db  # Path to the SQLite database file")
@@ -254,7 +235,24 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
     def test_style_output_line_for_warning_log(self) -> None:
         line = "2026-03-06 12:00:00 WARNING metacritic_scraper_py.scraper - failed slugs: demo"
         fragments = _style_output_line(line)
-        self.assertEqual(fragments, [("class:log.warning", line)])
+        self.assertEqual(
+            fragments,
+            [
+                ("class:log.warning", "2026-03-06 12:00:00 WARNING metacritic_scraper_py.scraper - "),
+                ("", "failed slugs: demo"),
+            ],
+        )
+
+    def test_style_output_line_for_error_log(self) -> None:
+        line = "2026-03-06 12:00:00 ERROR metacritic_scraper_py.scraper - request failed"
+        fragments = _style_output_line(line)
+        self.assertEqual(
+            fragments,
+            [
+                ("class:log.error", "2026-03-06 12:00:00 ERROR metacritic_scraper_py.scraper - "),
+                ("", "request failed"),
+            ],
+        )
 
     def test_style_output_line_for_cover_download_log(self) -> None:
         line = "2026-03-06 12:00:00 INFO metacritic_scraper_py.cli - download-covers finished total=20 downloaded=18 skipped=2 failed=0 output_dir=data/covers"
@@ -264,6 +262,12 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
     def test_style_output_line_for_non_settings(self) -> None:
         fragments = _style_output_line("Unknown command: clear. Type 'help' for available commands.")
         self.assertEqual(fragments, [("", "Unknown command: clear. Type 'help' for available commands.")])
+
+    def test_style_output_text_preserves_line_breaks(self) -> None:
+        fragments = _style_output_text("metacritic> show\ncrawl summary: games=1 failed=0")
+        self.assertIn(("class:prompt", "metacritic> show"), fragments)
+        self.assertIn(("", "\n"), fragments)
+        self.assertIn(("class:summary.label", "crawl summary:"), fragments)
 
 
 if __name__ == "__main__":
