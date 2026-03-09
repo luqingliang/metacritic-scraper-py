@@ -15,6 +15,7 @@
 - 抓取游戏详情接口（`Product`）和评分摘要接口。
 - 按分页抓取媒体评论与用户评论（`offset/limit`）。
 - 以规范化字段 + 原始 JSON 方式落库，便于追溯与二次处理。
+- 支持把 sitemap 全量 slug 同步到独立的 `game_slugs` 表。
 - 内置重试与退避，提升网络波动下的稳定性。
 - 支持导出 `.xlsx`，方便人工检查抓取结果。
 
@@ -109,10 +110,10 @@ metacritic-scraper crawl --incremental-by-date --db data/metacritic.db --include
 metacritic-scraper crawl --incremental-by-date --since-date 2026-03-01 --lookback-days 2 --db data/metacritic.db
 ```
 
-6) 导出 sitemap 中的 slug：
+6) 将 sitemap 中的全部 slug 同步到 SQLite：
 
 ```bash
-metacritic-scraper slugs --limit-slugs 100 --output data/slugs.txt
+metacritic-scraper sync-slugs --db data/metacritic.db
 ```
 
 7) 基于已抓取游戏信息批量下载封面图片实体：
@@ -145,7 +146,7 @@ metacritic-scraper export-excel --db data/metacritic.db --slug the-legend-of-zel
 metacritic-scraper --help
 metacritic-scraper crawl --help
 metacritic-scraper crawl-one --help
-metacritic-scraper slugs --help
+metacritic-scraper sync-slugs --help
 metacritic-scraper download-covers --help
 metacritic-scraper export-excel --help
 metacritic-scraper interactive --help
@@ -164,11 +165,13 @@ metacritic-scraper interactive --help
 SQLite 表：
 
 - `games`
+- `game_slugs`
 - `critic_reviews`
 - `user_reviews`
 
 每张表都保存关键规范化字段和原始 JSON（`*_json`），便于后续重放解析。
 其中 `games.cover_url` 用于保存封面图链接，直接由产品 `bucketPath` 组装为 catalog 原图地址（`/a/img/catalog/...`）。
+`game_slugs` 用于保存 sitemap slug 索引，并记录 `game_url`、`sitemap_url`、`discovered_at` 和 `last_seen_at`。
 
 ## 许可证
 
@@ -181,6 +184,7 @@ SQLite 表：
 - [x] 支持并发抓取（`--concurrency`）
 - [x] 支持交互 CLI 模式
 - [x] 保存封面链接到 `games.cover_url`
+- [x] 支持将 sitemap slug 索引同步到 `game_slugs`
 - [x] 抓取时可选下载封面（`--download-covers`）
 - [x] 支持基于数据库批量下载封面（`download-covers`）
 - [ ] 扩展电影数据

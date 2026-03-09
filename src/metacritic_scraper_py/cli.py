@@ -10,7 +10,6 @@ import sys
 import threading
 from contextlib import redirect_stdout
 from datetime import date
-from pathlib import Path
 from typing import Callable, Sequence
 
 from .client import MetacriticClient
@@ -27,6 +26,7 @@ from .storage import SQLiteStorage
 
 DEFAULT_QUICKSTART_MAX_GAMES = 50
 DEFAULT_QUICKSTART_MAX_REVIEW_PAGES = 1
+DEFAULT_SLUG_SYNC_BATCH_SIZE = 500
 INTERACTIVE_COMPOSER_MIN_LINES = 3
 INTERACTIVE_COMPOSER_MAX_LINES = 8
 INTERACTIVE_WELCOME_CONTENT_WIDTH = 74
@@ -162,14 +162,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overwrite existing cover files when downloading (default: false).",
     )
 
-    slugs = subparsers.add_parser("slugs", help="Extract game slugs from games sitemap.")
-    slugs.add_argument("--limit-sitemaps", type=int, default=None, help="Read only first N sitemap files.")
-    slugs.add_argument("--limit-slugs", type=int, default=None, help="Output only first N slugs.")
-    slugs.add_argument("--output", default=None, help="Write slugs to file instead of stdout.")
-    slugs.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS, help="HTTP timeout seconds.")
-    slugs.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES, help="Retry attempts.")
-    slugs.add_argument("--backoff", type=float, default=DEFAULT_BACKOFF_SECONDS, help="Retry backoff base seconds.")
-    slugs.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS, help="Sleep between requests.")
+    sync_slugs = subparsers.add_parser(
+        "sync-slugs",
+        help="Sync game slugs from games sitemap into SQLite.",
+    )
+    sync_slugs.add_argument("--db", default="data/metacritic.db", help="SQLite db path.")
+    sync_slugs.add_argument("--limit-sitemaps", type=int, default=None, help="Read only first N sitemap files.")
+    sync_slugs.add_argument("--limit-slugs", type=int, default=None, help="Read only first N slugs.")
+    sync_slugs.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS, help="HTTP timeout seconds.")
+    sync_slugs.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES, help="Retry attempts.")
+    sync_slugs.add_argument("--backoff", type=float, default=DEFAULT_BACKOFF_SECONDS, help="Retry backoff base seconds.")
+    sync_slugs.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS, help="Sleep between requests.")
 
     export_excel = subparsers.add_parser(
         "export-excel",
@@ -417,30 +420,174 @@ def run_crawl_one(args: argparse.Namespace) -> int:
         storage.close()
 
 
-def run_slugs(args: argparse.Namespace) -> int:
+def _sync_slugs_summary_text(
+    *,
+    processed: int,
+    inserted: int,
+    updated: int,
+    total: int,
+    stopped: bool = False,
+) -> str:
+    summary = (
+        "sync-slugs summary: processed=%d inserted=%d updated=%d total=%d"
+        % (processed, inserted, updated, total)
+    )
+    if stopped:
+        summary = f"{summary} stopped=1"
+    return summary
+
+
+def run_sync_slugs(args: argparse.Namespace) -> int:
     stop_event = _get_stop_event(args)
-    with _build_client(args) as client:
-        try:
-            slugs = client.iter_game_slugs(
-                limit_sitemaps=args.limit_sitemaps,
-                limit_slugs=args.limit_slugs,
+    storage = SQLiteStorage(args.db)
+    processed = 0
+    inserted = 0
+    updated = 0
+    if args.limit_slugs is not None and args.limit_slugs <= 0:
+        total = storage.count_rows("game_slugs")
+        logging.info(
+            "sync-slugs finished processed=%d inserted=%d updated=%d total=%d db=%s",
+            processed,
+            inserted,
+            updated,
+            total,
+            args.db,
+        )
+        if bool(getattr(args, "print_summary", False)):
+            print(
+                _sync_slugs_summary_text(
+                    processed=processed,
+                    inserted=inserted,
+                    updated=updated,
+                    total=total,
+                )
             )
-            if args.output:
-                output_path = Path(args.output)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                with output_path.open("w", encoding="utf-8") as f:
-                    for slug in slugs:
-                        _check_stop_requested(stop_event)
-                        f.write(slug + "\n")
-                logging.info("wrote slugs to %s", output_path)
-            else:
-                for slug in slugs:
+        return 0
+    current_sitemap_url: str | None = None
+    current_batch: list[tuple[str, str, str]] = []
+    current_seen_slugs: set[str] = set()
+    current_total_games = 0
+    current_saved_games = 0
+    current_inserted_games = 0
+    current_updated_games = 0
+
+    def _flush_current_batch() -> None:
+        nonlocal processed, inserted, updated
+        nonlocal current_saved_games, current_inserted_games, current_updated_games
+        if not current_batch:
+            return
+        one_processed, one_inserted, one_updated = storage.upsert_game_slugs(current_batch)
+        processed += one_processed
+        inserted += one_inserted
+        updated += one_updated
+        current_saved_games += one_processed
+        current_inserted_games += one_inserted
+        current_updated_games += one_updated
+        current_batch.clear()
+
+    def _log_current_sitemap(*, stopped: bool = False) -> None:
+        if current_sitemap_url is None:
+            return
+        message = (
+            "sync-slugs sitemap=%s total_games=%d saved_games=%d inserted=%d updated=%d"
+            if not stopped
+            else "sync-slugs sitemap=%s total_games=%d saved_games=%d inserted=%d updated=%d stopped=1"
+        )
+        logging.info(
+            message,
+            current_sitemap_url,
+            current_total_games,
+            current_saved_games,
+            current_inserted_games,
+            current_updated_games,
+        )
+
+    try:
+        with _build_client(args) as client:
+            try:
+                remaining_slugs = args.limit_slugs
+                reached_slug_limit = False
+
+                for sitemap_url in client.iter_game_sitemap_urls(limit_sitemaps=args.limit_sitemaps):
                     _check_stop_requested(stop_event)
-                    print(slug)
-        except InterruptedError:
-            logging.info("slugs stopped by user")
-            return 130
-    return 0
+                    current_sitemap_url = sitemap_url
+                    current_batch = []
+                    current_seen_slugs = set()
+                    current_total_games = 0
+                    current_saved_games = 0
+                    current_inserted_games = 0
+                    current_updated_games = 0
+
+                    for record in client.iter_game_slug_records_for_sitemap(sitemap_url):
+                        _check_stop_requested(stop_event)
+                        current_total_games += 1
+                        if record.slug in current_seen_slugs:
+                            continue
+                        current_seen_slugs.add(record.slug)
+                        current_batch.append((record.slug, record.game_url, record.sitemap_url))
+
+                        if len(current_batch) >= DEFAULT_SLUG_SYNC_BATCH_SIZE:
+                            _flush_current_batch()
+
+                        if remaining_slugs is not None:
+                            remaining_slugs -= 1
+                            if remaining_slugs <= 0:
+                                reached_slug_limit = True
+                                break
+
+                    _flush_current_batch()
+                    _log_current_sitemap()
+                    current_sitemap_url = None
+
+                    if reached_slug_limit:
+                        break
+            except InterruptedError:
+                _flush_current_batch()
+                _log_current_sitemap(stopped=True)
+                total = storage.count_rows("game_slugs")
+                logging.info(
+                    "sync-slugs stopped processed=%d inserted=%d updated=%d total=%d db=%s",
+                    processed,
+                    inserted,
+                    updated,
+                    total,
+                    args.db,
+                )
+                if bool(getattr(args, "print_summary", False)):
+                    print(
+                        _sync_slugs_summary_text(
+                            processed=processed,
+                            inserted=inserted,
+                            updated=updated,
+                            total=total,
+                            stopped=True,
+                        )
+                    )
+                return 130
+            finally:
+                current_sitemap_url = None
+
+        total = storage.count_rows("game_slugs")
+        logging.info(
+            "sync-slugs finished processed=%d inserted=%d updated=%d total=%d db=%s",
+            processed,
+            inserted,
+            updated,
+            total,
+            args.db,
+        )
+        if bool(getattr(args, "print_summary", False)):
+            print(
+                _sync_slugs_summary_text(
+                    processed=processed,
+                    inserted=inserted,
+                    updated=updated,
+                    total=total,
+                )
+            )
+        return 0
+    finally:
+        storage.close()
 
 
 def run_export_excel(args: argparse.Namespace) -> int:
@@ -591,7 +738,7 @@ def _print_interactive_help() -> str:
         "  crawl                             Run crawl with current settings",
         "  crawl-one <slug>                  Crawl one game with current settings",
         "  download-covers [output_dir]      Download cover image files from DB",
-        "  slugs [output_path]               Print slugs or save to a file",
+        "  sync-slugs                        Sync sitemap slugs into SQLite",
         "  export-excel [output_path]        Export DB data to Excel",
         "  exit | quit                       Exit interactive shell",
         "",
@@ -602,6 +749,7 @@ def _print_interactive_help() -> str:
         "  set download_covers true",
         "  set incremental_by_date true",
         "  crawl",
+        "  sync-slugs",
         "  download-covers",
         "  crawl-one the-legend-of-zelda-breath-of-the-wild",
     ]
@@ -621,7 +769,7 @@ def _print_interactive_help_zh() -> str:
         "  crawl                             用当前配置执行批量抓取",
         "  crawl-one <slug>                  抓取单个游戏",
         "  download-covers [output_dir]      基于已抓取数据下载封面图片实体",
-        "  slugs [output_path]               打印 slug 或写入文件",
+        "  sync-slugs                        将 sitemap 中的 slug 同步到 SQLite",
         "  export-excel [output_path]        导出 SQLite 数据到 Excel",
         "  exit | quit                       退出交互模式",
         "",
@@ -630,6 +778,7 @@ def _print_interactive_help_zh() -> str:
         "  set include_reviews true",
         "  set concurrency 4",
         "  crawl",
+        "  sync-slugs",
         "  download-covers",
         "  export-excel data/metacritic_export.xlsx",
     ]
@@ -714,8 +863,8 @@ def _style_output_line(line: str) -> list[tuple[str, str]]:
     if line.startswith("metacritic>"):
         return [("class:prompt", line)]
 
-    if line.startswith("crawl summary:") or line.startswith("crawl-one summary:"):
-        match = re.match(r"^(crawl(?:-one)? summary:)\s*(.*)$", line)
+    if re.match(r"^[a-z]+(?:-[a-z]+)* summary:", line):
+        match = re.match(r"^([a-z]+(?:-[a-z]+)* summary:)\s*(.*)$", line)
         if match:
             label = match.group(1)
             rest = match.group(2)
@@ -1112,19 +1261,19 @@ def _run_interactive_command(
             _run_with_captured_stdout(run_download_covers, ns, emit)
             return True
 
-        if cmd == "slugs":
-            output = args[0] if args else None
+        if cmd == "sync-slugs":
             ns = argparse.Namespace(
+                db=settings["db"],
                 limit_sitemaps=settings["limit_sitemaps"],
                 limit_slugs=settings["limit_slugs"],
-                output=output,
                 timeout=settings["timeout"],
                 max_retries=settings["max_retries"],
                 backoff=settings["backoff"],
                 delay=settings["delay"],
+                print_summary=True,
                 stop_event=stop_event,
             )
-            _run_with_captured_stdout(run_slugs, ns, emit)
+            _run_with_captured_stdout(run_sync_slugs, ns, emit)
             return True
 
         if cmd == "export-excel":
@@ -1242,7 +1391,7 @@ def run_interactive() -> int:
                 style=output_style,
             )
 
-    stoppable_commands = {"crawl", "crawl-one", "slugs", "download-covers"}
+    stoppable_commands = {"crawl", "crawl-one", "sync-slugs", "download-covers"}
 
     def _request_stop_current_command() -> str:
         if not _interactive_command_is_running(running_command):
@@ -1314,7 +1463,7 @@ def run_interactive() -> int:
     root_logger.addHandler(ui_handler)
     root_logger.setLevel(previous_level)
 
-    background_commands = {"crawl", "crawl-one", "slugs", "download-covers", "export-excel"}
+    background_commands = {"crawl", "crawl-one", "sync-slugs", "download-covers", "export-excel"}
     with output_lock:
         print_formatted_text(
             FormattedText(_interactive_welcome_fragments()),
@@ -1383,8 +1532,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_crawl(args)
     if args.command == "crawl-one":
         return run_crawl_one(args)
-    if args.command == "slugs":
-        return run_slugs(args)
+    if args.command == "sync-slugs":
+        return run_sync_slugs(args)
     if args.command == "export-excel":
         return run_export_excel(args)
     if args.command == "download-covers":

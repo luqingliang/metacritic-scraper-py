@@ -15,6 +15,7 @@ Python crawler for Metacritic game data, focused on:
 - Crawls game detail endpoint (`Product`) and score summary endpoints.
 - Crawls critic and user reviews with pagination (`offset/limit`).
 - Stores normalized data + raw JSON payloads into SQLite for traceability.
+- Can sync the full sitemap slug inventory into a dedicated `game_slugs` table.
 - Includes retry + backoff for unstable network/API responses.
 - Exports crawled results to Excel (`.xlsx`) for manual QA.
 
@@ -109,10 +110,10 @@ metacritic-scraper crawl --incremental-by-date --db data/metacritic.db --include
 metacritic-scraper crawl --incremental-by-date --since-date 2026-03-01 --lookback-days 2 --db data/metacritic.db
 ```
 
-6) Export slugs from sitemap:
+6) Sync all sitemap slugs into SQLite:
 
 ```bash
-metacritic-scraper slugs --limit-slugs 100 --output data/slugs.txt
+metacritic-scraper sync-slugs --db data/metacritic.db
 ```
 
 7) Batch download cover image files from already crawled games:
@@ -145,7 +146,7 @@ metacritic-scraper export-excel --db data/metacritic.db --slug the-legend-of-zel
 metacritic-scraper --help
 metacritic-scraper crawl --help
 metacritic-scraper crawl-one --help
-metacritic-scraper slugs --help
+metacritic-scraper sync-slugs --help
 metacritic-scraper download-covers --help
 metacritic-scraper export-excel --help
 metacritic-scraper interactive --help
@@ -164,11 +165,13 @@ metacritic-scraper interactive --help
 SQLite tables:
 
 - `games`
+- `game_slugs`
 - `critic_reviews`
 - `user_reviews`
 
 Each table stores essential normalized fields and raw JSON payloads (`*_json`) for future reprocessing.
 `games.cover_url` stores the cover image URL built from product `bucketPath` (`/a/img/catalog/...`).
+`game_slugs` stores the current sitemap slug index with `game_url`, `sitemap_url`, `discovered_at`, and `last_seen_at`.
 
 ## License
 
@@ -181,6 +184,7 @@ This project is licensed under the MIT License. See [LICENSE](./LICENSE).
 - [x] Optional concurrent crawling (`--concurrency`)
 - [x] Interactive CLI mode
 - [x] Store cover URLs in `games.cover_url`
+- [x] Sync sitemap slug inventory into `game_slugs`
 - [x] Optional cover download during crawl (`--download-covers`)
 - [x] Batch cover download from DB (`download-covers`)
 - [ ] Expand to Movies

@@ -80,6 +80,14 @@ class SQLiteStorage:
                     scraped_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS game_slugs (
+                    slug TEXT PRIMARY KEY,
+                    game_url TEXT NOT NULL,
+                    sitemap_url TEXT NOT NULL,
+                    discovered_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS critic_reviews (
                     slug TEXT NOT NULL,
                     review_key TEXT NOT NULL,
@@ -114,6 +122,9 @@ class SQLiteStorage:
 
                 CREATE INDEX IF NOT EXISTS idx_critic_reviews_slug
                     ON critic_reviews(slug);
+
+                CREATE INDEX IF NOT EXISTS idx_game_slugs_sitemap_url
+                    ON game_slugs(sitemap_url);
 
                 CREATE INDEX IF NOT EXISTS idx_user_reviews_slug
                     ON user_reviews(slug);
@@ -291,6 +302,52 @@ class SQLiteStorage:
             )
             self.conn.commit()
         return len(rows)
+
+    def upsert_game_slugs(self, game_slugs: Iterable[tuple[str, str, str]]) -> tuple[int, int, int]:
+        now = _utc_now_iso()
+        row_by_slug: dict[str, dict[str, str]] = {}
+        for slug, game_url, sitemap_url in game_slugs:
+            normalized_slug = str(slug).strip()
+            if not normalized_slug:
+                continue
+            row_by_slug[normalized_slug] = {
+                "slug": normalized_slug,
+                "game_url": str(game_url),
+                "sitemap_url": str(sitemap_url),
+                "discovered_at": now,
+                "last_seen_at": now,
+            }
+
+        rows = list(row_by_slug.values())
+        if not rows:
+            return 0, 0, 0
+
+        placeholders = ",".join("?" for _ in rows)
+        with self._lock:
+            cursor = self.conn.execute(
+                f"SELECT slug FROM game_slugs WHERE slug IN ({placeholders})",
+                tuple(row["slug"] for row in rows),
+            )
+            existing_slugs = {str(row[0]) for row in cursor.fetchall()}
+            self.conn.executemany(
+                """
+                INSERT INTO game_slugs (
+                    slug, game_url, sitemap_url, discovered_at, last_seen_at
+                ) VALUES (
+                    :slug, :game_url, :sitemap_url, :discovered_at, :last_seen_at
+                )
+                ON CONFLICT(slug) DO UPDATE SET
+                    game_url=excluded.game_url,
+                    sitemap_url=excluded.sitemap_url,
+                    last_seen_at=excluded.last_seen_at
+                """,
+                rows,
+            )
+            self.conn.commit()
+
+        inserted = sum(1 for row in rows if row["slug"] not in existing_slugs)
+        updated = len(rows) - inserted
+        return len(rows), inserted, updated
 
     def count_rows(self, table_name: str) -> int:
         with self._lock:

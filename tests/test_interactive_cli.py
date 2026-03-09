@@ -30,6 +30,7 @@ from metacritic_scraper_py.cli import (
     _style_output_line,
     run_crawl,
     run_download_covers,
+    run_sync_slugs,
 )
 from metacritic_scraper_py.scraper import CrawlResult
 
@@ -130,6 +131,13 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertEqual(args.output_dir, "data/covers")
         self.assertIsNone(args.limit)
         self.assertFalse(args.overwrite)
+
+    def test_sync_slugs_parser_defaults(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["sync-slugs"])
+        self.assertEqual(args.db, "data/metacritic.db")
+        self.assertIsNone(args.limit_sitemaps)
+        self.assertIsNone(args.limit_slugs)
 
     def test_help_zh_command(self) -> None:
         settings = _interactive_defaults()
@@ -254,6 +262,23 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertEqual(captured.get("func_name"), "run_crawl")
         self.assertIs(captured.get("stop_event"), stop_event)
 
+    def test_interactive_sync_slugs_enables_print_summary(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        captured: dict[str, object] = {}
+
+        def _fake_run_with_captured_stdout(func, namespace, emit) -> None:
+            captured["func_name"] = getattr(func, "__name__", "")
+            captured["print_summary"] = getattr(namespace, "print_summary", None)
+            emit("[done] exit_code=0")
+
+        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+            keep_running = _run_interactive_command(["sync-slugs"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(captured.get("func_name"), "run_sync_slugs")
+        self.assertTrue(captured.get("print_summary"))
+
     def test_run_crawl_returns_130_when_scraper_stops(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["crawl"])
@@ -298,6 +323,32 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             return_value=client,
         ):
             exit_code = run_download_covers(args)
+
+        self.assertEqual(exit_code, 130)
+        storage.close.assert_called_once()
+
+    def test_run_sync_slugs_returns_130_when_stop_is_requested(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["sync-slugs"])
+        args.stop_event = threading.Event()
+        args.stop_event.set()
+
+        storage = MagicMock()
+        storage.upsert_game_slugs.return_value = (0, 0, 0)
+        storage.count_rows.return_value = 0
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.__exit__.return_value = None
+        client.iter_game_sitemap_urls.return_value = iter(["https://example.com/sitemap.xml"])
+        client.iter_game_slug_records_for_sitemap.return_value = iter(
+            [MagicMock(slug="demo", game_url="https://example.com", sitemap_url="https://example.com/sitemap.xml")]
+        )
+
+        with patch("metacritic_scraper_py.cli.SQLiteStorage", return_value=storage), patch(
+            "metacritic_scraper_py.cli._build_client",
+            return_value=client,
+        ):
+            exit_code = run_sync_slugs(args)
 
         self.assertEqual(exit_code, 130)
         storage.close.assert_called_once()
@@ -404,6 +455,31 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
                 ("class:summary.key", "failed"),
                 ("", "="),
                 ("class:summary.value", "0"),
+            ],
+        )
+
+    def test_style_output_line_for_sync_slugs_summary(self) -> None:
+        fragments = _style_output_line("sync-slugs summary: processed=3 inserted=2 updated=1 total=9")
+        self.assertEqual(
+            fragments,
+            [
+                ("class:summary.label", "sync-slugs summary:"),
+                ("", " "),
+                ("class:summary.key", "processed"),
+                ("", "="),
+                ("class:summary.value", "3"),
+                ("", " "),
+                ("class:summary.key", "inserted"),
+                ("", "="),
+                ("class:summary.value", "2"),
+                ("", " "),
+                ("class:summary.key", "updated"),
+                ("", "="),
+                ("class:summary.value", "1"),
+                ("", " "),
+                ("class:summary.key", "total"),
+                ("", "="),
+                ("class:summary.value", "9"),
             ],
         )
 

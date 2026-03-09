@@ -38,6 +38,13 @@ class ReviewPage:
     total_results: int
 
 
+@dataclass(frozen=True)
+class GameSlugRecord:
+    slug: str
+    game_url: str
+    sitemap_url: str
+
+
 def slug_from_game_url(url: str) -> str | None:
     """
     Extract slug from URLs like:
@@ -236,22 +243,44 @@ class MetacriticClient:
         limit_sitemaps: int | None = None,
         limit_slugs: int | None = None,
     ) -> Iterator[str]:
+        for record in self.iter_game_slug_records(
+            limit_sitemaps=limit_sitemaps,
+            limit_slugs=limit_slugs,
+        ):
+            yield record.slug
+
+    def iter_game_slug_records(
+        self,
+        *,
+        limit_sitemaps: int | None = None,
+        limit_slugs: int | None = None,
+    ) -> Iterator[GameSlugRecord]:
         yielded = 0
         for sitemap_url in self.iter_game_sitemap_urls(limit_sitemaps=limit_sitemaps):
             self._check_stopped()
-            xml_text = self._get_text(sitemap_url)
-            root = ET.fromstring(xml_text)
-            for node in root.findall(".//sm:url/sm:loc", SITEMAP_NS):
-                self._check_stopped()
-                if not node.text:
-                    continue
-                slug = slug_from_game_url(node.text.strip())
-                if not slug:
-                    continue
-                yield slug
+            for record in self.iter_game_slug_records_for_sitemap(sitemap_url):
+                yield record
                 yielded += 1
                 if limit_slugs and yielded >= limit_slugs:
                     return
+
+    def iter_game_slug_records_for_sitemap(self, sitemap_url: str) -> Iterator[GameSlugRecord]:
+        self._check_stopped()
+        xml_text = self._get_text(sitemap_url)
+        root = ET.fromstring(xml_text)
+        for node in root.findall(".//sm:url/sm:loc", SITEMAP_NS):
+            self._check_stopped()
+            if not node.text:
+                continue
+            game_url = node.text.strip()
+            slug = slug_from_game_url(game_url)
+            if not slug:
+                continue
+            yield GameSlugRecord(
+                slug=slug,
+                game_url=game_url,
+                sitemap_url=sitemap_url,
+            )
 
     def fetch_product(self, slug: str) -> dict:
         url = f"{BASE_API_URL}/games/metacritic/{slug}/web"
