@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from metacritic_scraper_py.cover_downloader import CoverImageDownloader
 from metacritic_scraper_py.storage import SQLiteStorage
@@ -80,6 +81,27 @@ class CoverImageDownloaderTestCase(unittest.TestCase):
             )
             status = downloader.download(slug="demo-game", cover_url="https://cdn.example.com/path/cover.jpg")
             self.assertEqual(status, "failed")
+
+    def test_download_reraises_interrupted_error_and_cleans_tmp_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            downloader = CoverImageDownloader(
+                fetch_binary=lambda _: b"binary-content",
+                output_dir=tmpdir,
+                overwrite=False,
+            )
+            original_write_bytes = Path.write_bytes
+
+            def _interrupt_after_partial_write(path: Path, data: bytes) -> int:
+                written = original_write_bytes(path, data)
+                if path.suffix == ".part":
+                    raise InterruptedError("stopped by user")
+                return written
+
+            with patch("pathlib.Path.write_bytes", autospec=True, side_effect=_interrupt_after_partial_write):
+                with self.assertRaises(InterruptedError):
+                    downloader.download(slug="demo-game", cover_url="https://cdn.example.com/path/cover.jpg")
+
+            self.assertEqual(list(Path(tmpdir).glob("*.part")), [])
 
 
 class CoverUrlStorageQueryTestCase(unittest.TestCase):

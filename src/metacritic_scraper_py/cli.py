@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+import os
 import re
 import shlex
 import sys
@@ -26,6 +27,13 @@ from .storage import SQLiteStorage
 
 DEFAULT_QUICKSTART_MAX_GAMES = 50
 DEFAULT_QUICKSTART_MAX_REVIEW_PAGES = 1
+INTERACTIVE_COMPOSER_MIN_LINES = 3
+INTERACTIVE_COMPOSER_MAX_LINES = 8
+INTERACTIVE_WELCOME_CONTENT_WIDTH = 74
+INTERACTIVE_WELCOME_LABEL_WIDTH = 28
+INTERACTIVE_WELCOME_TITLE = "METACRITIC SCRAPER"
+LOG_BULLET = "●"
+LOG_FORMAT = f"{LOG_BULLET} %(levelname)s %(name)s - %(message)s"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -228,11 +236,23 @@ def configure_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
-        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+        format=LOG_FORMAT,
     )
+    for handler in logging.getLogger().handlers:
+        handler.terminator = "\n\n"
     if not verbose:
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def _get_stop_event(args: argparse.Namespace) -> threading.Event | None:
+    stop_event = getattr(args, "stop_event", None)
+    return stop_event if isinstance(stop_event, threading.Event) else None
+
+
+def _check_stop_requested(stop_event: threading.Event | None) -> None:
+    if stop_event is not None and stop_event.is_set():
+        raise InterruptedError("stopped by user")
 
 
 def _build_client(args: argparse.Namespace) -> MetacriticClient:
@@ -241,6 +261,7 @@ def _build_client(args: argparse.Namespace) -> MetacriticClient:
         max_retries=args.max_retries,
         backoff_seconds=args.backoff,
         delay_seconds=args.delay,
+        stop_event=_get_stop_event(args),
     )
 
 
@@ -255,11 +276,12 @@ def run_crawl(args: argparse.Namespace) -> int:
     download_covers = bool(getattr(args, "download_covers", False))
     covers_dir = str(getattr(args, "covers_dir", "data/covers"))
     overwrite_covers = bool(getattr(args, "overwrite_covers", False))
+    stop_event = _get_stop_event(args)
 
     storage = SQLiteStorage(args.db)
     try:
         with _build_client(args) as client:
-            scraper = MetacriticScraper(client, storage)
+            scraper = MetacriticScraper(client, storage, stop_event=stop_event)
             if args.incremental_by_date:
                 result = scraper.crawl_incremental_by_date(
                     include_reviews=args.include_reviews,
@@ -291,9 +313,10 @@ def run_crawl(args: argparse.Namespace) -> int:
                 )
         logging.info(
             (
-                "crawl finished games=%d critic_reviews=%d user_reviews=%d "
+                "crawl %s games=%d critic_reviews=%d user_reviews=%d "
                 "covers_downloaded=%d covers_skipped=%d covers_failed=%d failed=%d"
             ),
+            "stopped" if result.stopped else "finished",
             result.games_crawled,
             result.critic_reviews_saved,
             result.user_reviews_saved,
@@ -303,7 +326,7 @@ def run_crawl(args: argparse.Namespace) -> int:
             len(result.failed_slugs),
         )
         if bool(getattr(args, "print_summary", False)):
-            print(
+            summary = (
                 (
                     "crawl summary: games=%d critic_reviews=%d user_reviews=%d "
                     "covers_downloaded=%d covers_skipped=%d covers_failed=%d failed=%d"
@@ -318,9 +341,12 @@ def run_crawl(args: argparse.Namespace) -> int:
                     len(result.failed_slugs),
                 )
             )
+            if result.stopped:
+                summary = f"{summary} stopped=1"
+            print(summary)
         if result.failed_slugs:
             logging.warning("failed slugs: %s", ",".join(result.failed_slugs))
-        return 0
+        return 130 if result.stopped else 0
     finally:
         storage.close()
 
@@ -329,11 +355,12 @@ def run_crawl_one(args: argparse.Namespace) -> int:
     download_covers = bool(getattr(args, "download_covers", False))
     covers_dir = str(getattr(args, "covers_dir", "data/covers"))
     overwrite_covers = bool(getattr(args, "overwrite_covers", False))
+    stop_event = _get_stop_event(args)
 
     storage = SQLiteStorage(args.db)
     try:
         with _build_client(args) as client:
-            scraper = MetacriticScraper(client, storage)
+            scraper = MetacriticScraper(client, storage, stop_event=stop_event)
             cover_downloader = (
                 CoverImageDownloader(
                     fetch_binary=client.fetch_binary,
@@ -352,9 +379,10 @@ def run_crawl_one(args: argparse.Namespace) -> int:
             )
         logging.info(
             (
-                "crawl-one finished games=%d critic_reviews=%d user_reviews=%d "
+                "crawl-one %s games=%d critic_reviews=%d user_reviews=%d "
                 "covers_downloaded=%d covers_skipped=%d covers_failed=%d failed=%d"
             ),
+            "stopped" if result.stopped else "finished",
             result.games_crawled,
             result.critic_reviews_saved,
             result.user_reviews_saved,
@@ -364,7 +392,7 @@ def run_crawl_one(args: argparse.Namespace) -> int:
             len(result.failed_slugs),
         )
         if bool(getattr(args, "print_summary", False)):
-            print(
+            summary = (
                 (
                     "crawl-one summary: games=%d critic_reviews=%d user_reviews=%d "
                     "covers_downloaded=%d covers_skipped=%d covers_failed=%d failed=%d"
@@ -379,27 +407,39 @@ def run_crawl_one(args: argparse.Namespace) -> int:
                     len(result.failed_slugs),
                 )
             )
+            if result.stopped:
+                summary = f"{summary} stopped=1"
+            print(summary)
+        if result.stopped:
+            return 130
         return 0 if not result.failed_slugs else 2
     finally:
         storage.close()
 
 
 def run_slugs(args: argparse.Namespace) -> int:
+    stop_event = _get_stop_event(args)
     with _build_client(args) as client:
-        slugs = client.iter_game_slugs(
-            limit_sitemaps=args.limit_sitemaps,
-            limit_slugs=args.limit_slugs,
-        )
-        if args.output:
-            output_path = Path(args.output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("w", encoding="utf-8") as f:
+        try:
+            slugs = client.iter_game_slugs(
+                limit_sitemaps=args.limit_sitemaps,
+                limit_slugs=args.limit_slugs,
+            )
+            if args.output:
+                output_path = Path(args.output)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with output_path.open("w", encoding="utf-8") as f:
+                    for slug in slugs:
+                        _check_stop_requested(stop_event)
+                        f.write(slug + "\n")
+                logging.info("wrote slugs to %s", output_path)
+            else:
                 for slug in slugs:
-                    f.write(slug + "\n")
-            logging.info("wrote slugs to %s", output_path)
-        else:
-            for slug in slugs:
-                print(slug)
+                    _check_stop_requested(stop_event)
+                    print(slug)
+        except InterruptedError:
+            logging.info("slugs stopped by user")
+            return 130
     return 0
 
 
@@ -424,6 +464,7 @@ def run_download_covers(args: argparse.Namespace) -> int:
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be >= 1")
 
+    stop_event = _get_stop_event(args)
     storage = SQLiteStorage(args.db)
     try:
         rows = storage.list_game_cover_urls(slug=args.slug, limit=args.limit)
@@ -436,14 +477,26 @@ def run_download_covers(args: argparse.Namespace) -> int:
             downloaded = 0
             skipped = 0
             failed = 0
-            for slug, cover_url in rows:
-                status = downloader.download(slug=slug, cover_url=cover_url)
-                if status == "downloaded":
-                    downloaded += 1
-                elif status == "skipped":
-                    skipped += 1
-                else:
-                    failed += 1
+            try:
+                for slug, cover_url in rows:
+                    _check_stop_requested(stop_event)
+                    status = downloader.download(slug=slug, cover_url=cover_url)
+                    if status == "downloaded":
+                        downloaded += 1
+                    elif status == "skipped":
+                        skipped += 1
+                    else:
+                        failed += 1
+            except InterruptedError:
+                logging.info(
+                    "download-covers stopped total=%d downloaded=%d skipped=%d failed=%d output_dir=%s",
+                    len(rows),
+                    downloaded,
+                    skipped,
+                    failed,
+                    args.output_dir,
+                )
+                return 130
 
         logging.info(
             "download-covers finished total=%d downloaded=%d skipped=%d failed=%d output_dir=%s",
@@ -534,6 +587,7 @@ def _print_interactive_help() -> str:
         "  show                              Show settings with English explanations",
         "  set <key> <value>                 Update setting (use 'none' for null)",
         "  reset                             Reset settings to defaults",
+        "  stop                              Request stop for the current background crawl/download task",
         "  crawl                             Run crawl with current settings",
         "  crawl-one <slug>                  Crawl one game with current settings",
         "  download-covers [output_dir]      Download cover image files from DB",
@@ -563,6 +617,7 @@ def _print_interactive_help_zh() -> str:
         "  show                              显示带英文说明的参数列表",
         "  set <key> <value>                 修改配置（null/none 表示空值）",
         "  reset                             重置为默认配置",
+        "  stop                              请求停止当前后台抓取/下载任务",
         "  crawl                             用当前配置执行批量抓取",
         "  crawl-one <slug>                  抓取单个游戏",
         "  download-covers [output_dir]      基于已抓取数据下载封面图片实体",
@@ -686,20 +741,28 @@ def _style_output_line(line: str) -> list[tuple[str, str]]:
                 return fragments
 
     log_match = re.match(
-        r"^(?P<prefix>\S+\s+\S+\s+)(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL)(?P<suffix>\s+\S+\s+-\s+)(?P<message>.*)$",
+        rf"^(?P<bullet>{re.escape(LOG_BULLET)}\s+)?(?P<header>(?:(?:\S+\s+\S+\s+))?(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+\S+\s+-\s+)(?P<message>.*)$",
         line,
     )
     if log_match:
+        bullet = log_match.group("bullet") or ""
         level = log_match.group("level")
-        header = f"{log_match.group('prefix')}{level}{log_match.group('suffix')}"
+        header = log_match.group("header")
         message = log_match.group("message")
+        fragments: list[tuple[str, str]] = []
+        if bullet:
+            fragments.append(("class:log.bullet", bullet))
+        if "download-covers finished" in message or "cover download" in message:
+            fragments.append(("class:log.cover", f"{header}{message}"))
+            return fragments
         if level == "WARNING":
-            return [("class:log.warning", header), ("", message)]
+            fragments.extend([("class:log.warning", header), ("", message)])
+            return fragments
         if level in {"ERROR", "CRITICAL"}:
-            return [("class:log.error", header), ("", message)]
-
-    if "download-covers finished" in line or "cover download" in line:
-        return [("class:log.cover", line)]
+            fragments.extend([("class:log.error", header), ("", message)])
+            return fragments
+        fragments.append(("", f"{header}{message}"))
+        return fragments
 
     match = re.match(r"^([A-Za-z0-9_]+)\s=\s(.*)$", line)
     if not match:
@@ -734,14 +797,156 @@ def _style_output_text(text: str) -> list[tuple[str, str]]:
     return fragments
 
 
-def _interactive_banner_lines() -> list[str]:
+def _interactive_welcome_rows() -> list[tuple[str, str, str | None]]:
     return [
-        "Metacritic Scraper Interactive Shell",
-        (
-            "Type 'help' to see commands. Output streams to terminal. "
-            "Prompt stays at bottom. Ctrl-C/Ctrl-D exits."
-        ),
+        ("title", INTERACTIVE_WELCOME_TITLE, None),
+        ("subtitle", "Crawl games, export Excel, and sync cover assets from one shell.", None),
+        ("blank", "", None),
+        ("section", "Quick Start", None),
+        ("item", "help or help-zh", "Show English or Chinese help and usage examples"),
+        ("item", "show", "Inspect the active configuration"),
+        ("item", "stop", "Request stop for the current background crawl/download task"),
+        ("item", "crawl", "Run a crawl with the current settings"),
+        ("item", "crawl-one <slug>", "Fetch one game immediately"),
+        ("blank", "", None),
+        ("section", "Input Tips", None),
+        ("item", "Enter", "Submit the current command"),
+        ("item", "Up / Down", "Navigate command history"),
+        ("item", "Ctrl-C / Ctrl-D", "Exit the interactive shell"),
     ]
+
+
+def _interactive_welcome_frame_line(text: str) -> str:
+    return text.ljust(INTERACTIVE_WELCOME_CONTENT_WIDTH)
+
+
+def _interactive_title_art_word_lines(word: str) -> list[str]:
+    return [word.center(INTERACTIVE_WELCOME_CONTENT_WIDTH)]
+
+
+def _interactive_title_art_lines() -> list[str]:
+    return _interactive_title_art_word_lines(INTERACTIVE_WELCOME_TITLE)
+
+
+def _interactive_welcome_lines() -> list[str]:
+    lines: list[str] = []
+
+    for kind, label, detail in _interactive_welcome_rows():
+        if kind == "blank":
+            content = ""
+        elif kind == "title":
+            lines.extend(_interactive_title_art_lines())
+            continue
+        elif kind == "item":
+            detail_text = detail or ""
+            content = f"  {label:<{INTERACTIVE_WELCOME_LABEL_WIDTH}} {detail_text}"
+        else:
+            content = label
+        lines.append(_interactive_welcome_frame_line(content))
+
+    return lines
+
+
+def _interactive_banner_lines() -> list[str]:
+    return _interactive_welcome_lines()
+
+
+def _interactive_welcome_fragments() -> list[tuple[str, str]]:
+    fragments: list[tuple[str, str]] = []
+    row_width = INTERACTIVE_WELCOME_CONTENT_WIDTH
+
+    def _append_line(parts: list[tuple[str, str]]) -> None:
+        if fragments:
+            fragments.append(("", "\n"))
+        fragments.extend(parts)
+
+    for kind, label, detail in _interactive_welcome_rows():
+        if kind == "blank":
+            _append_line([("", " " * row_width)])
+            continue
+
+        if kind == "title":
+            content = label.center(row_width)
+            _append_line([("class:welcome.title", content)])
+            continue
+
+        if kind == "subtitle":
+            content = label.center(row_width)
+            _append_line([("class:welcome.subtitle", content)])
+            continue
+
+        if kind == "section":
+            padding = max(0, row_width - len(label))
+            _append_line([("class:welcome.section", label), ("", " " * padding)])
+            continue
+
+        label_text = f"  {label:<{INTERACTIVE_WELCOME_LABEL_WIDTH}}"
+        detail_text = detail or ""
+        padding = max(0, row_width - len(label_text) - len(detail_text) - 1)
+        _append_line(
+            [
+                ("class:welcome.command", label_text),
+                ("", " "),
+                ("class:welcome.text", detail_text),
+                ("", " " * padding),
+            ]
+        )
+    return fragments
+
+
+def _interactive_composer_height(text: str) -> int:
+    logical_lines = max(1, str(text).count("\n") + 1)
+    return max(
+        INTERACTIVE_COMPOSER_MIN_LINES,
+        min(INTERACTIVE_COMPOSER_MAX_LINES, logical_lines),
+    )
+
+
+def _interactive_help_hint_text() -> str:
+    return "Type 'help' or 'help-zh'"
+
+
+def _interactive_command_is_running(running_command: dict[str, object | None]) -> bool:
+    thread = running_command.get("thread")
+    if not isinstance(thread, threading.Thread):
+        return False
+    if thread.is_alive():
+        return True
+    running_command["thread"] = None
+    running_command["name"] = None
+    return False
+
+
+def _refresh_interactive_cursor_blink(app: object) -> None:
+    """
+    Force prompt_toolkit to re-send the blinking cursor shape on the next render.
+
+    prompt_toolkit's VT100 output toggles blinking off when it shows the cursor
+    during a repaint, but the renderer caches the last cursor shape and won't
+    emit the blinking shape again unless the cached value changes.
+    """
+
+    renderer = getattr(app, "renderer", None)
+    if renderer is not None and hasattr(renderer, "_last_cursor_shape"):
+        renderer._last_cursor_shape = None
+
+    invalidate = getattr(app, "invalidate", None)
+    if callable(invalidate):
+        invalidate()
+
+
+def _format_interactive_command_echo(text: str) -> str:
+    stripped = str(text).strip()
+    if not stripped:
+        return "metacritic>"
+
+    lines = stripped.splitlines()
+    prefix = "metacritic> "
+    continuation = " " * len(prefix)
+    rendered = [f"{prefix}{lines[0]}"]
+    for line in lines[1:]:
+        rendered.append(f"{continuation}{line}")
+    return "\n".join(rendered)
 
 
 def _run_with_captured_stdout(
@@ -779,6 +984,9 @@ def _run_interactive_command(
     tokens: list[str],
     settings: dict[str, object],
     emit: Callable[[str], None],
+    *,
+    request_stop: Callable[[], str] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> bool:
     cmd = tokens[0].lower()
     args = tokens[1:]
@@ -807,6 +1015,12 @@ def _run_interactive_command(
         settings.clear()
         settings.update(_interactive_defaults())
         emit("Settings reset.")
+        return True
+    if cmd == "stop":
+        if request_stop is None:
+            emit("No background command is running.")
+        else:
+            emit(request_stop())
         return True
     if cmd == "set":
         if len(args) < 2:
@@ -852,6 +1066,7 @@ def _run_interactive_command(
                 covers_dir=settings["covers_dir"],
                 overwrite_covers=settings["overwrite_covers"],
                 print_summary=True,
+                stop_event=stop_event,
             )
             _run_with_captured_stdout(run_crawl, ns, emit)
             return True
@@ -875,6 +1090,7 @@ def _run_interactive_command(
                 covers_dir=settings["covers_dir"],
                 overwrite_covers=settings["overwrite_covers"],
                 print_summary=True,
+                stop_event=stop_event,
             )
             _run_with_captured_stdout(run_crawl_one, ns, emit)
             return True
@@ -891,6 +1107,7 @@ def _run_interactive_command(
                 max_retries=settings["max_retries"],
                 backoff=settings["backoff"],
                 delay=settings["delay"],
+                stop_event=stop_event,
             )
             _run_with_captured_stdout(run_download_covers, ns, emit)
             return True
@@ -905,6 +1122,7 @@ def _run_interactive_command(
                 max_retries=settings["max_retries"],
                 backoff=settings["backoff"],
                 delay=settings["delay"],
+                stop_event=stop_event,
             )
             _run_with_captured_stdout(run_slugs, ns, emit)
             return True
@@ -920,7 +1138,7 @@ def _run_interactive_command(
             _run_with_captured_stdout(run_export_excel, ns, emit)
             return True
 
-        emit(f"Unknown command: {cmd}. Type 'help' for available commands.")
+        emit(f"Unknown command: {cmd}. Type 'help' or 'help-zh' for available commands.")
         return True
     except Exception as exc:  # pragma: no cover
         emit(f"Command failed: {exc}")
@@ -931,11 +1149,11 @@ class _InteractiveLogHandler(logging.Handler):
     def __init__(self, emit: Callable[[str], None]) -> None:
         super().__init__()
         self._emit = emit
-        self.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s"))
+        self.setFormatter(logging.Formatter(LOG_FORMAT))
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            self._emit(self.format(record))
+            self._emit(f"{self.format(record)}\n")
         except Exception:  # pragma: no cover
             return
 
@@ -966,8 +1184,12 @@ def run_interactive() -> int:
         return _run_interactive_plain(settings)
 
     try:
+        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
         from prompt_toolkit import PromptSession, print_formatted_text
+        from prompt_toolkit.cursor_shapes import CursorShape
         from prompt_toolkit.formatted_text import FormattedText
+        from prompt_toolkit.history import InMemoryHistory
+        from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.patch_stdout import patch_stdout
         from prompt_toolkit.styles import Style
     except Exception:
@@ -975,12 +1197,15 @@ def run_interactive() -> int:
 
     output_lock = threading.Lock()
     running_command: dict[str, object | None] = {"thread": None, "name": None}
+    stop_event = threading.Event()
+
     output_style = Style.from_dict(
         {
             "prompt": "bold ansicyan",
             "summary.label": "bold ansibrightgreen",
             "summary.key": "ansibrightgreen",
             "summary.value": "bold ansiwhite",
+            "log.bullet": "ansibrightblack",
             "log.warning": "bold ansibrightyellow",
             "log.error": "bold ansibrightred",
             "log.cover": "bold ansibrightcyan",
@@ -988,13 +1213,27 @@ def run_interactive() -> int:
             "settings.value": "bold ansiyellow",
             "settings.comment_prefix": "ansibrightblack",
             "settings.comment": "ansibrightblack",
+            "welcome.border": "ansibrightblack",
+            "welcome.title": "bold ansibrightcyan",
+            "welcome.subtitle": "ansiwhite",
+            "welcome.section": "bold ansibrightgreen",
+            "welcome.command": "bold ansiyellow",
+            "welcome.text": "ansiwhite",
         }
     )
     prompt_style = Style.from_dict(
         {
             "prompt": "bold ansicyan",
+            "placeholder": "ansibrightblack",
         }
     )
+
+    previous_no_cpr = os.environ.get("PROMPT_TOOLKIT_NO_CPR")
+    os.environ["PROMPT_TOOLKIT_NO_CPR"] = "1"
+
+    session = PromptSession(history=InMemoryHistory())
+
+    kb = KeyBindings()
 
     def emit_output(message: str) -> None:
         with output_lock:
@@ -1003,18 +1242,27 @@ def run_interactive() -> int:
                 style=output_style,
             )
 
-    def _command_is_running() -> bool:
-        thread = running_command.get("thread")
-        if thread is None:
-            return False
-        return bool(getattr(thread, "is_alive", lambda: False)())
+    stoppable_commands = {"crawl", "crawl-one", "slugs", "download-covers"}
+
+    def _request_stop_current_command() -> str:
+        if not _interactive_command_is_running(running_command):
+            return "No background command is running."
+
+        command_name = str(running_command.get("name") or "")
+        if command_name not in stoppable_commands:
+            return f"[stop] command cannot be interrupted: {command_name}"
+        if stop_event.is_set():
+            return f"[stopping] stop already requested for {command_name}"
+        stop_event.set()
+        return f"[stopping] requested stop for {command_name}"
 
     def _run_command_in_background(tokens: list[str]) -> None:
-        if _command_is_running():
+        if _interactive_command_is_running(running_command):
             emit_output(f"[busy] command is still running: {running_command.get('name')}")
             return
 
         command_name = str(tokens[0]).lower()
+        stop_event.clear()
 
         def _worker() -> None:
             try:
@@ -1022,8 +1270,10 @@ def run_interactive() -> int:
                     tokens,
                     settings,
                     emit_output,
+                    stop_event=stop_event,
                 )
             finally:
+                stop_event.clear()
                 running_command["thread"] = None
                 running_command["name"] = None
 
@@ -1032,6 +1282,28 @@ def run_interactive() -> int:
         running_command["thread"] = worker
         emit_output(f"[running] {command_name} (prompt remains responsive)")
         worker.start()
+
+    @kb.add("enter")
+    def _submit_current_input(event) -> None:
+        event.current_buffer.validate_and_handle()
+
+    @kb.add("up")
+    def _history_previous(event) -> None:
+        event.current_buffer.history_backward()
+        _refresh_interactive_cursor_blink(event.app)
+
+    @kb.add("down")
+    def _history_next(event) -> None:
+        event.current_buffer.history_forward()
+        _refresh_interactive_cursor_blink(event.app)
+
+    @kb.add("c-c")
+    def _abort_prompt(event) -> None:
+        event.app.exit(exception=KeyboardInterrupt(), style="class:aborting")
+
+    @kb.add("c-d")
+    def _end_prompt(event) -> None:
+        event.app.exit(exception=EOFError(), style="class:exiting")
 
     root_logger = logging.getLogger()
     previous_handlers = list(root_logger.handlers)
@@ -1042,9 +1314,12 @@ def run_interactive() -> int:
     root_logger.addHandler(ui_handler)
     root_logger.setLevel(previous_level)
 
-    session = PromptSession()
     background_commands = {"crawl", "crawl-one", "slugs", "download-covers", "export-excel"}
-    emit_output("\n".join(_interactive_banner_lines()))
+    with output_lock:
+        print_formatted_text(
+            FormattedText(_interactive_welcome_fragments()),
+            style=output_style,
+        )
 
     try:
         with patch_stdout():
@@ -1052,7 +1327,14 @@ def run_interactive() -> int:
                 try:
                     line = session.prompt(
                         [("class:prompt", "metacritic> ")],
+                        key_bindings=kb,
                         style=prompt_style,
+                        placeholder=lambda: [("class:placeholder", _interactive_help_hint_text())],
+                        cursor=CursorShape.BLINKING_BEAM,
+                        multiline=False,
+                        show_frame=True,
+                        auto_suggest=AutoSuggestFromHistory(),
+                        mouse_support=False,
                     ).strip()
                 except (EOFError, KeyboardInterrupt):
                     print()
@@ -1076,6 +1358,7 @@ def run_interactive() -> int:
                     tokens,
                     settings,
                     emit_output,
+                    request_stop=_request_stop_current_command,
                 ):
                     return 0
     finally:
@@ -1083,6 +1366,10 @@ def run_interactive() -> int:
         for handler in previous_handlers:
             root_logger.addHandler(handler)
         root_logger.setLevel(previous_level)
+        if previous_no_cpr is None:
+            os.environ.pop("PROMPT_TOOLKIT_NO_CPR", None)
+        else:
+            os.environ["PROMPT_TOOLKIT_NO_CPR"] = previous_no_cpr
 
 
 def main(argv: Sequence[str] | None = None) -> int:

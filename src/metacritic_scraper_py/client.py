@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -102,6 +103,7 @@ class MetacriticClient:
         backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
         delay_seconds: float = DEFAULT_DELAY_SECONDS,
         user_agent: str | None = None,
+        stop_event: threading.Event | None = None,
     ) -> None:
         headers = dict(DEFAULT_HEADERS)
         if user_agent:
@@ -109,12 +111,22 @@ class MetacriticClient:
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
         self.delay_seconds = delay_seconds
+        self._stop_event = stop_event
+        self._closed_event = threading.Event()
         self._http = httpx.Client(
             headers=headers,
             timeout=timeout_seconds,
             follow_redirects=True,
             http2=False,
         )
+        self._stop_watcher: threading.Thread | None = None
+        if self._stop_event is not None:
+            self._stop_watcher = threading.Thread(
+                target=self._watch_for_stop,
+                name="metacritic-client-stop",
+                daemon=True,
+            )
+            self._stop_watcher.start()
 
     def __enter__(self) -> "MetacriticClient":
         return self
@@ -123,18 +135,42 @@ class MetacriticClient:
         self.close()
 
     def close(self) -> None:
+        self._closed_event.set()
         self._http.close()
+        if self._stop_watcher is not None and self._stop_watcher is not threading.current_thread():
+            self._stop_watcher.join(timeout=0.2)
+
+    def _watch_for_stop(self) -> None:
+        assert self._stop_event is not None
+        while not self._closed_event.is_set():
+            if self._stop_event.wait(0.1):
+                self._http.close()
+                return
+
+    def _check_stopped(self) -> None:
+        if self._stop_event is not None and self._stop_event.is_set():
+            raise InterruptedError("stopped by user")
+
+    def _sleep_for(self, seconds: float) -> None:
+        if seconds <= 0:
+            return
+        if self._stop_event is None:
+            time.sleep(seconds)
+            return
+        if self._stop_event.wait(seconds):
+            self._check_stopped()
 
     def _sleep(self) -> None:
-        if self.delay_seconds > 0:
-            time.sleep(self.delay_seconds)
+        self._sleep_for(self.delay_seconds)
 
     def _request(self, url: str, *, params: dict | None = None) -> httpx.Response:
         last_error: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
+            self._check_stopped()
             try:
                 self._sleep()
                 response = self._http.get(url, params=params)
+                self._check_stopped()
                 if response.status_code in RETRY_STATUS_CODES:
                     raise MetacriticClientError(
                         f"retryable status code {response.status_code} for {response.url}"
@@ -144,7 +180,11 @@ class MetacriticClient:
                         f"status code {response.status_code} for {response.url}"
                     )
                 return response
+            except RuntimeError:
+                self._check_stopped()
+                raise
             except (httpx.TransportError, httpx.TimeoutException, MetacriticClientError) as exc:
+                self._check_stopped()
                 last_error = exc
                 if attempt >= self.max_retries:
                     break
@@ -156,7 +196,7 @@ class MetacriticClient:
                     attempt,
                     self.max_retries,
                 )
-                time.sleep(wait_seconds)
+                self._sleep_for(wait_seconds)
         raise MetacriticClientError(f"request failed after retries: {last_error}")
 
     def _get_text(self, url: str) -> str:
@@ -182,6 +222,7 @@ class MetacriticClient:
         root = ET.fromstring(xml_text)
         count = 0
         for node in root.findall(".//sm:sitemap/sm:loc", SITEMAP_NS):
+            self._check_stopped()
             if not node.text:
                 continue
             yield node.text.strip()
@@ -197,9 +238,11 @@ class MetacriticClient:
     ) -> Iterator[str]:
         yielded = 0
         for sitemap_url in self.iter_game_sitemap_urls(limit_sitemaps=limit_sitemaps):
+            self._check_stopped()
             xml_text = self._get_text(sitemap_url)
             root = ET.fromstring(xml_text)
             for node in root.findall(".//sm:url/sm:loc", SITEMAP_NS):
+                self._check_stopped()
                 if not node.text:
                     continue
                 slug = slug_from_game_url(node.text.strip())
@@ -295,6 +338,7 @@ class MetacriticClient:
         offset = 0
         page_num = 0
         while True:
+            self._check_stopped()
             if max_pages is not None and page_num >= max_pages:
                 return
             page = self.fetch_reviews_page(
@@ -306,6 +350,7 @@ class MetacriticClient:
             if not page.items:
                 return
             for item in page.items:
+                self._check_stopped()
                 yield item
             page_num += 1
             if not page.next_href:

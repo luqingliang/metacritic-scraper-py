@@ -1,20 +1,37 @@
 import argparse
+import logging
+import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from metacritic_scraper_py.cli import (
     DEFAULT_QUICKSTART_MAX_GAMES,
     DEFAULT_QUICKSTART_MAX_REVIEW_PAGES,
+    INTERACTIVE_COMPOSER_MAX_LINES,
+    INTERACTIVE_COMPOSER_MIN_LINES,
+    INTERACTIVE_WELCOME_CONTENT_WIDTH,
+    INTERACTIVE_WELCOME_TITLE,
+    LOG_BULLET,
+    _InteractiveLogHandler,
     build_parser,
     _convert_setting_value,
+    _format_interactive_command_echo,
     _interactive_banner_lines,
+    _interactive_command_is_running,
+    _interactive_composer_height,
+    _interactive_help_hint_text,
+    _interactive_title_art_lines,
     _interactive_defaults,
     _parse_bool,
+    _refresh_interactive_cursor_blink,
     _run_interactive_command,
     _run_with_captured_stdout,
     _style_output_text,
     _style_output_line,
+    run_crawl,
+    run_download_covers,
 )
+from metacritic_scraper_py.scraper import CrawlResult
 
 
 class InteractiveCliParsingTestCase(unittest.TestCase):
@@ -122,6 +139,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(keep_running)
         self.assertTrue(output)
         self.assertIn("交互命令（中文释义）", output[0])
+        self.assertIn("请求停止当前后台抓取/下载任务", output[0])
 
     def test_help_with_zh_argument(self) -> None:
         settings = _interactive_defaults()
@@ -131,6 +149,15 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(keep_running)
         self.assertTrue(output)
         self.assertIn("交互命令（中文释义）", output[0])
+
+    def test_help_command_describes_stop_scope(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        keep_running = _run_interactive_command(["help"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertTrue(output)
+        self.assertIn("current background crawl/download task", output[0])
 
     def test_show_zh_command(self) -> None:
         settings = _interactive_defaults()
@@ -181,12 +208,160 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(output)
         self.assertIn("Unknown command: clear", output[0])
 
+    def test_stop_command_without_running_background_task(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+
+        keep_running = _run_interactive_command(["stop"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(output, ["No background command is running."])
+
+    def test_stop_command_uses_request_stop_callback(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+
+        keep_running = _run_interactive_command(
+            ["stop"],
+            settings,
+            output.append,
+            request_stop=lambda: "[stopping] requested stop for crawl",
+        )
+
+        self.assertTrue(keep_running)
+        self.assertEqual(output, ["[stopping] requested stop for crawl"])
+
+    def test_interactive_crawl_passes_stop_event(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        captured: dict[str, object] = {}
+        stop_event = threading.Event()
+
+        def _fake_run_with_captured_stdout(func, namespace, emit) -> None:
+            captured["func_name"] = getattr(func, "__name__", "")
+            captured["stop_event"] = getattr(namespace, "stop_event", None)
+            emit("[done] exit_code=130")
+
+        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+            keep_running = _run_interactive_command(
+                ["crawl"],
+                settings,
+                output.append,
+                stop_event=stop_event,
+            )
+
+        self.assertTrue(keep_running)
+        self.assertEqual(captured.get("func_name"), "run_crawl")
+        self.assertIs(captured.get("stop_event"), stop_event)
+
+    def test_run_crawl_returns_130_when_scraper_stops(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["crawl"])
+        args.print_summary = False
+        args.stop_event = threading.Event()
+
+        storage = MagicMock()
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.__exit__.return_value = None
+        scraper = MagicMock()
+        scraper.crawl_from_sitemaps.return_value = CrawlResult(stopped=True)
+
+        with patch("metacritic_scraper_py.cli.SQLiteStorage", return_value=storage), patch(
+            "metacritic_scraper_py.cli._build_client",
+            return_value=client,
+        ), patch("metacritic_scraper_py.cli.MetacriticScraper", return_value=scraper) as scraper_cls:
+            exit_code = run_crawl(args)
+
+        self.assertEqual(exit_code, 130)
+        self.assertIs(scraper_cls.call_args.kwargs["stop_event"], args.stop_event)
+        storage.close.assert_called_once()
+
+    def test_run_download_covers_returns_130_when_fetch_is_interrupted(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["download-covers"])
+        args.stop_event = threading.Event()
+
+        storage = MagicMock()
+        storage.list_game_cover_urls.return_value = [("demo-game", "https://cdn.example.com/path/cover.jpg")]
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.__exit__.return_value = None
+
+        def _fetch_binary(_: str) -> bytes:
+            raise InterruptedError("stopped by user")
+
+        client.fetch_binary = _fetch_binary
+
+        with patch("metacritic_scraper_py.cli.SQLiteStorage", return_value=storage), patch(
+            "metacritic_scraper_py.cli._build_client",
+            return_value=client,
+        ):
+            exit_code = run_download_covers(args)
+
+        self.assertEqual(exit_code, 130)
+        storage.close.assert_called_once()
+
     def test_interactive_banner_lines(self) -> None:
         lines = _interactive_banner_lines()
-        self.assertEqual(len(lines), 2)
-        self.assertIn("Metacritic Scraper Interactive Shell", lines[0])
-        self.assertIn("Type 'help' to see commands.", lines[1])
-        self.assertIn("Output streams to terminal.", lines[1])
+        banner_text = "\n".join(lines)
+        self.assertGreaterEqual(len(lines), 10)
+        self.assertFalse(any("╭" in line or "╰" in line or "│" in line for line in lines))
+        self.assertEqual(lines[0].strip(), INTERACTIVE_WELCOME_TITLE)
+        self.assertIn("Crawl games, export Excel", banner_text)
+        self.assertIn("Quick Start", banner_text)
+        self.assertIn("Input Tips", banner_text)
+        self.assertIn("help or help-zh", banner_text)
+        self.assertIn("crawl/download task", banner_text)
+        self.assertIn("crawl-one <slug>", banner_text)
+        self.assertIn("Up / Down", banner_text)
+
+    def test_interactive_title_art_lines(self) -> None:
+        lines = _interactive_title_art_lines()
+        self.assertEqual(lines, [INTERACTIVE_WELCOME_TITLE.center(INTERACTIVE_WELCOME_CONTENT_WIDTH)])
+
+    def test_interactive_composer_height_clamps_to_min_and_max(self) -> None:
+        self.assertEqual(_interactive_composer_height(""), INTERACTIVE_COMPOSER_MIN_LINES)
+        self.assertEqual(_interactive_composer_height("crawl"), INTERACTIVE_COMPOSER_MIN_LINES)
+
+        tall_text = "\n".join(f"line-{idx}" for idx in range(20))
+        self.assertEqual(_interactive_composer_height(tall_text), INTERACTIVE_COMPOSER_MAX_LINES)
+
+    def test_interactive_help_hint_text(self) -> None:
+        self.assertEqual(_interactive_help_hint_text(), "Type 'help' or 'help-zh'")
+
+    def test_interactive_command_is_running_clears_finished_thread(self) -> None:
+        worker = threading.Thread(target=lambda: None)
+        worker.start()
+        worker.join()
+        state: dict[str, object | None] = {"thread": worker, "name": "crawl"}
+
+        self.assertFalse(_interactive_command_is_running(state))
+        self.assertIsNone(state["thread"])
+        self.assertIsNone(state["name"])
+
+    def test_refresh_interactive_cursor_blink_invalidates_renderer_cache(self) -> None:
+        class _Renderer:
+            def __init__(self) -> None:
+                self._last_cursor_shape = "BLINKING_BEAM"
+
+        class _App:
+            def __init__(self) -> None:
+                self.renderer = _Renderer()
+                self.invalidated = False
+
+            def invalidate(self) -> None:
+                self.invalidated = True
+
+        app = _App()
+        _refresh_interactive_cursor_blink(app)
+
+        self.assertIsNone(app.renderer._last_cursor_shape)
+        self.assertTrue(app.invalidated)
+
+    def test_format_interactive_command_echo_preserves_multiline_alignment(self) -> None:
+        echoed = _format_interactive_command_echo("set db data/demo.db\nshow")
+        self.assertEqual(echoed, "metacritic> set db data/demo.db\n            show")
 
     def test_style_output_line_for_settings(self) -> None:
         fragments = _style_output_line("db = data/metacritic.db  # Path to the SQLite database file")
@@ -233,35 +408,66 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         )
 
     def test_style_output_line_for_warning_log(self) -> None:
-        line = "2026-03-06 12:00:00 WARNING metacritic_scraper_py.scraper - failed slugs: demo"
+        line = "● WARNING metacritic_scraper_py.scraper - failed slugs: demo"
         fragments = _style_output_line(line)
         self.assertEqual(
             fragments,
             [
-                ("class:log.warning", "2026-03-06 12:00:00 WARNING metacritic_scraper_py.scraper - "),
+                ("class:log.bullet", "● "),
+                ("class:log.warning", "WARNING metacritic_scraper_py.scraper - "),
                 ("", "failed slugs: demo"),
             ],
         )
 
     def test_style_output_line_for_error_log(self) -> None:
-        line = "2026-03-06 12:00:00 ERROR metacritic_scraper_py.scraper - request failed"
+        line = "● ERROR metacritic_scraper_py.scraper - request failed"
         fragments = _style_output_line(line)
         self.assertEqual(
             fragments,
             [
-                ("class:log.error", "2026-03-06 12:00:00 ERROR metacritic_scraper_py.scraper - "),
+                ("class:log.bullet", "● "),
+                ("class:log.error", "ERROR metacritic_scraper_py.scraper - "),
                 ("", "request failed"),
             ],
         )
 
     def test_style_output_line_for_cover_download_log(self) -> None:
-        line = "2026-03-06 12:00:00 INFO metacritic_scraper_py.cli - download-covers finished total=20 downloaded=18 skipped=2 failed=0 output_dir=data/covers"
+        line = "● INFO metacritic_scraper_py.cli - download-covers finished total=20 downloaded=18 skipped=2 failed=0 output_dir=data/covers"
         fragments = _style_output_line(line)
-        self.assertEqual(fragments, [("class:log.cover", line)])
+        self.assertEqual(
+            fragments,
+            [
+                ("class:log.bullet", "● "),
+                (
+                    "class:log.cover",
+                    "INFO metacritic_scraper_py.cli - download-covers finished total=20 downloaded=18 skipped=2 failed=0 output_dir=data/covers",
+                ),
+            ],
+        )
+
+    def test_interactive_log_handler_appends_blank_line(self) -> None:
+        output: list[str] = []
+        handler = _InteractiveLogHandler(output.append)
+        record = logging.LogRecord(
+            name="metacritic_scraper_py.scraper",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="crawl started",
+            args=(),
+            exc_info=None,
+        )
+
+        handler.emit(record)
+
+        self.assertEqual(output, [f"{LOG_BULLET} INFO metacritic_scraper_py.scraper - crawl started\n"])
 
     def test_style_output_line_for_non_settings(self) -> None:
-        fragments = _style_output_line("Unknown command: clear. Type 'help' for available commands.")
-        self.assertEqual(fragments, [("", "Unknown command: clear. Type 'help' for available commands.")])
+        fragments = _style_output_line("Unknown command: clear. Type 'help' or 'help-zh' for available commands.")
+        self.assertEqual(
+            fragments,
+            [("", "Unknown command: clear. Type 'help' or 'help-zh' for available commands.")],
+        )
 
     def test_style_output_text_preserves_line_breaks(self) -> None:
         fragments = _style_output_text("metacritic> show\ncrawl summary: games=1 failed=0")

@@ -41,6 +41,14 @@ class CoverImageDownloader:
         filename = _safe_slug_filename(slug) + _cover_extension_from_url(cover_url)
         return self.output_dir / filename
 
+    @staticmethod
+    def _cleanup_tmp_path(tmp_path: Path) -> None:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+
     def download(self, *, slug: str, cover_url: str | None) -> CoverDownloadStatus:
         if not cover_url:
             return "skipped"
@@ -55,10 +63,9 @@ class CoverImageDownloader:
             tmp_path.write_bytes(content)
             tmp_path.replace(target_path)
             return "downloaded"
+        except InterruptedError:
+            self._cleanup_tmp_path(tmp_path)
+            raise
         except Exception:
-            try:
-                if tmp_path.exists():
-                    tmp_path.unlink()
-            except OSError:
-                pass
+            self._cleanup_tmp_path(tmp_path)
             return "failed"
