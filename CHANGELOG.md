@@ -10,6 +10,21 @@ and this project follows [Semantic Versioning](https://semver.org/).
 ### Added
 - Planned: multi-domain crawling support (Movies / TV Shows / Music).
 
+## [0.1.6] - 2026-03-09
+
+### Added
+- Interactive `stop` command for background `crawl`, `crawl-one`, `slugs`, and `download-covers` tasks.
+- Client-level stop regression tests for in-flight request cancellation handling.
+
+### Changed
+- Interactive welcome/help text now reflects the current stop-capable command set.
+- Package version metadata is now aligned across `pyproject.toml` and `metacritic_scraper_py.__version__`.
+
+### Fixed
+- Background stop requests now propagate through the CLI, scraper, HTTP client, and cover download flow.
+- Cover downloads no longer swallow `InterruptedError`, and interrupted downloads clean up temporary `.part` files.
+- Interactive crawl state cleanup now avoids repeated stop exceptions during concurrent worker shutdown.
+
 ## [0.1.5] - 2026-03-07
 
 ### Changed
@@ -79,7 +94,8 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - SQLite-based storage for crawled game data.
 - Core CLI commands for crawling and basic data operations.
 
-[Unreleased]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.2...v0.1.3

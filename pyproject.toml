@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metacritic-scraper-py"
-version = "0.1.5"
+version = "0.1.6"
 description = "A practical Python scraper for Metacritic game data."
 readme = "README.md"
 requires-python = ">=3.10"
