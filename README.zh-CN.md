@@ -169,4 +169,4 @@ SQLite 表：
 ## 注意事项
 
 - 大规模抓取前请先确认目标站点规则与条款。
-- 请使用合理请求速率，并避免抓取 `robots.txt` 明确禁止的路径。
+- 请使用合理请求速率，并避免抓取 Metacritic `robots.txt` 明确禁止的路径：`https://www.metacritic.com/robots.txt`。

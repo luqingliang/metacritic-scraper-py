@@ -169,4 +169,4 @@ This project is licensed under the MIT License. See [LICENSE](./LICENSE).
 ## Notes
 
 - Respect target site rules and terms before large-scale crawling.
-- Use moderate request rates and avoid disallowed paths in `robots.txt`.
+- Use moderate request rates and avoid paths disallowed by Metacritic's `robots.txt`: `https://www.metacritic.com/robots.txt`.
