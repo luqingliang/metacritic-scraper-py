@@ -52,6 +52,7 @@ metacritic-scraper
 show
 help-zh
 show-zh
+clear-db
 set db data/metacritic.db
 set concurrency 4
 crawl
@@ -63,7 +64,8 @@ exit
 
 为了更利于上手，`crawl` 和交互模式默认使用“快速上手配置”：
 
-- `include_reviews = false`
+- `include_critic_reviews = false`
+- `include_user_reviews = false`
 - `max_review_pages = 1`
 - `concurrency = 4`
 
@@ -72,13 +74,13 @@ exit
 2) 抓取单个游戏：
 
 ```bash
-metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild --db data/metacritic.db --include-reviews --max-review-pages 2
+metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild --db data/metacritic.db --include-critic-reviews --include-user-reviews --max-review-pages 2
 ```
 
 3) 抓取 `game_slugs` 表中的全部 slug：
 
 ```bash
-metacritic-scraper crawl --db data/metacritic.db --include-reviews --max-review-pages 1
+metacritic-scraper crawl --db data/metacritic.db --include-critic-reviews --include-user-reviews --max-review-pages 1
 ```
 
 可选：在抓取游戏信息时同时下载封面图片实体（默认关闭）。
@@ -90,7 +92,7 @@ metacritic-scraper crawl --db data/metacritic.db --download-covers --covers-dir 
 可选：开启并发抓取（例如 4 个 worker）。
 
 ```bash
-metacritic-scraper crawl --concurrency 4 --db data/metacritic.db --include-reviews
+metacritic-scraper crawl --concurrency 4 --db data/metacritic.db --include-critic-reviews --include-user-reviews
 ```
 
 4) 将 sitemap 中的全部 slug 同步到 SQLite：
@@ -111,6 +113,12 @@ metacritic-scraper download-covers --db data/metacritic.db --output-dir data/cov
 metacritic-scraper export-excel --db data/metacritic.db --output data/excel/metacritic_export.xlsx
 ```
 
+7) 在保留表结构的前提下一键清空所有业务表：
+
+```bash
+metacritic-scraper clear-db --db data/metacritic.db
+```
+
 ## CLI 概览
 
 ```bash
@@ -120,6 +128,7 @@ metacritic-scraper crawl-one --help
 metacritic-scraper sync-slugs --help
 metacritic-scraper download-covers --help
 metacritic-scraper export-excel --help
+metacritic-scraper clear-db --help
 metacritic-scraper interactive --help
 ```
 

@@ -1,24 +1,26 @@
 import argparse
 import logging
+import sqlite3
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from metacritic_scraper_py.cli import (
     DEFAULT_CONCURRENCY,
     DEFAULT_QUICKSTART_MAX_REVIEW_PAGES,
-    INTERACTIVE_COMPOSER_MAX_LINES,
-    INTERACTIVE_COMPOSER_MIN_LINES,
+    INTERACTIVE_BACKGROUND_COMMANDS,
+    GAME_SLUGS_LAST_FULL_SYNC_AT_STATE_KEY,
     INTERACTIVE_WELCOME_CONTENT_WIDTH,
     INTERACTIVE_WELCOME_TITLE,
     LOG_BULLET,
     _InteractiveLogHandler,
     build_parser,
     _convert_setting_value,
-    _format_interactive_command_echo,
     _interactive_banner_lines,
     _interactive_command_is_running,
-    _interactive_composer_height,
+    _interactive_game_slugs_status_text,
     _interactive_help_hint_text,
     _interactive_title_art_lines,
     _interactive_defaults,
@@ -29,10 +31,12 @@ from metacritic_scraper_py.cli import (
     _style_output_text,
     _style_output_line,
     run_crawl,
+    run_clear_db,
     run_download_covers,
     run_sync_slugs,
 )
 from metacritic_scraper_py.scraper import CrawlResult
+from metacritic_scraper_py.storage import SQLiteStorage
 
 
 class InteractiveCliParsingTestCase(unittest.TestCase):
@@ -92,6 +96,8 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
     def test_convert_setting_value_optional(self) -> None:
         self.assertEqual(_convert_setting_value("concurrency", "4"), 4)
         self.assertEqual(_convert_setting_value("delay", "0.5"), 0.5)
+        self.assertTrue(_convert_setting_value("include_critic_reviews", "true"))
+        self.assertFalse(_convert_setting_value("include_user_reviews", "false"))
         self.assertTrue(_convert_setting_value("download_covers", "true"))
         self.assertFalse(_convert_setting_value("overwrite_covers", "false"))
         self.assertEqual(_convert_setting_value("covers_dir", "data/covers"), "data/covers")
@@ -99,21 +105,27 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
     def test_quickstart_defaults_for_crawl_parser(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["crawl"])
-        self.assertFalse(args.include_reviews)
+        self.assertFalse(args.include_critic_reviews)
+        self.assertFalse(args.include_user_reviews)
         self.assertEqual(args.max_review_pages, DEFAULT_QUICKSTART_MAX_REVIEW_PAGES)
         self.assertEqual(args.concurrency, DEFAULT_CONCURRENCY)
         self.assertFalse(args.download_covers)
         self.assertEqual(args.covers_dir, "data/covers")
         self.assertFalse(args.overwrite_covers)
 
-    def test_crawl_parser_can_disable_default_reviews(self) -> None:
+    def test_crawl_parser_can_enable_review_types_separately(self) -> None:
         parser = build_parser()
-        args = parser.parse_args(["crawl", "--no-include-reviews"])
-        self.assertFalse(args.include_reviews)
+        critic_args = parser.parse_args(["crawl", "--include-critic-reviews"])
+        user_args = parser.parse_args(["crawl", "--include-user-reviews"])
+        self.assertTrue(critic_args.include_critic_reviews)
+        self.assertFalse(critic_args.include_user_reviews)
+        self.assertFalse(user_args.include_critic_reviews)
+        self.assertTrue(user_args.include_user_reviews)
 
     def test_interactive_defaults_use_quickstart_profile(self) -> None:
         settings = _interactive_defaults()
-        self.assertFalse(settings["include_reviews"])
+        self.assertFalse(settings["include_critic_reviews"])
+        self.assertFalse(settings["include_user_reviews"])
         self.assertEqual(settings["max_review_pages"], DEFAULT_QUICKSTART_MAX_REVIEW_PAGES)
         self.assertEqual(settings["concurrency"], DEFAULT_CONCURRENCY)
         self.assertFalse(settings["download_covers"])
@@ -125,7 +137,8 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
     def test_crawl_one_parser_defaults(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["crawl-one", "demo-game"])
-        self.assertFalse(args.include_reviews)
+        self.assertFalse(args.include_critic_reviews)
+        self.assertFalse(args.include_user_reviews)
         self.assertEqual(args.max_review_pages, DEFAULT_QUICKSTART_MAX_REVIEW_PAGES)
 
     def test_download_covers_parser_defaults(self) -> None:
@@ -141,6 +154,13 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertEqual(args.db, "data/metacritic.db")
         self.assertEqual(args.output, "data/excel/metacritic_export.xlsx")
         self.assertFalse(hasattr(args, "include_raw_json"))
+
+    def test_clear_db_parser_defaults(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["clear-db"])
+        self.assertEqual(args.db, "data/metacritic.db")
+        self.assertEqual(args.command, "clear-db")
+        self.assertEqual(set(vars(args)), {"verbose", "command", "db"})
 
     def test_sync_slugs_parser_defaults(self) -> None:
         parser = build_parser()
@@ -160,6 +180,9 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(keep_running)
         self.assertTrue(output)
         self.assertIn("交互命令（中文释义）", output[0])
+        self.assertIn("help | help-zh", output[0])
+        self.assertIn("show | show-zh", output[0])
+        self.assertIn("clear-db", output[0])
         self.assertIn("请求停止当前后台抓取/下载任务", output[0])
 
     def test_help_with_zh_argument(self) -> None:
@@ -178,6 +201,9 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
         self.assertTrue(keep_running)
         self.assertTrue(output)
+        self.assertIn("help | help-zh", output[0])
+        self.assertIn("show | show-zh", output[0])
+        self.assertIn("clear-db", output[0])
         self.assertIn("current background crawl/download task", output[0])
 
     def test_show_zh_command(self) -> None:
@@ -228,6 +254,34 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(keep_running)
         self.assertTrue(output)
         self.assertIn("Unknown command: clear", output[0])
+
+    def test_interactive_clear_db_enables_print_summary(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        captured: dict[str, object] = {}
+
+        def _fake_run_with_captured_stdout(func, namespace, emit) -> None:
+            captured["func_name"] = getattr(func, "__name__", "")
+            captured["print_summary"] = getattr(namespace, "print_summary", None)
+            captured["db"] = getattr(namespace, "db", None)
+            emit("[done] exit_code=0")
+
+        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+            keep_running = _run_interactive_command(["clear-db"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(captured.get("func_name"), "run_clear_db")
+        self.assertTrue(captured.get("print_summary"))
+        self.assertEqual(captured.get("db"), "data/metacritic.db")
+
+    def test_interactive_clear_db_rejects_extra_args(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+
+        keep_running = _run_interactive_command(["clear-db", "now"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(output, ["Usage: clear-db"])
 
     def test_stop_command_without_running_background_task(self) -> None:
         settings = _interactive_defaults()
@@ -374,6 +428,81 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertEqual(exit_code, 130)
         storage.close.assert_called_once()
 
+    def test_run_clear_db_prints_summary_and_closes_storage(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["clear-db"])
+        args.print_summary = True
+
+        storage = MagicMock()
+        storage.clear_all_tables.return_value = {
+            "critic_reviews": 3,
+            "user_reviews": 2,
+            "games": 1,
+            "game_slugs": 4,
+            "sync_state": 1,
+        }
+
+        with patch("metacritic_scraper_py.cli._validate_existing_project_db_for_clear", return_value=None), patch(
+            "metacritic_scraper_py.cli.SQLiteStorage",
+            return_value=storage,
+        ), patch("builtins.print") as print_mock:
+            exit_code = run_clear_db(args)
+
+        self.assertEqual(exit_code, 0)
+        print_mock.assert_called_once_with(
+            "clear-db summary: critic_reviews=3 user_reviews=2 games=1 game_slugs=4 sync_state=1 total=11"
+        )
+        storage.close.assert_called_once()
+
+    def test_run_clear_db_rejects_missing_db_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "missing.db"
+            parser = build_parser()
+            args = parser.parse_args(["clear-db", "--db", str(db_path)])
+            args.print_summary = True
+
+            with patch("metacritic_scraper_py.cli.logging.error") as error_log:
+                exit_code = run_clear_db(args)
+
+            self.assertEqual(exit_code, 2)
+            self.assertFalse(db_path.exists())
+            error_log.assert_called_once_with(
+                f"clear-db requires an existing project database file: {db_path}"
+            )
+
+    def test_run_clear_db_rejects_uninitialized_sqlite_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "other.db"
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+                conn.commit()
+            finally:
+                conn.close()
+
+            parser = build_parser()
+            args = parser.parse_args(["clear-db", "--db", str(db_path)])
+            args.print_summary = True
+
+            with patch("metacritic_scraper_py.cli.logging.error") as error_log:
+                exit_code = run_clear_db(args)
+
+            self.assertEqual(exit_code, 2)
+            error_log.assert_called_once()
+            self.assertIn("clear-db requires an initialized project database; missing tables:", error_log.call_args.args[0])
+
+            conn = sqlite3.connect(db_path)
+            try:
+                tables = {
+                    str(row[0])
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                    ).fetchall()
+                }
+            finally:
+                conn.close()
+            self.assertEqual(tables, {"unrelated"})
+
     def test_run_sync_slugs_returns_130_when_stop_is_requested(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["sync-slugs"])
@@ -419,15 +548,65 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         lines = _interactive_title_art_lines()
         self.assertEqual(lines, [INTERACTIVE_WELCOME_TITLE.center(INTERACTIVE_WELCOME_CONTENT_WIDTH)])
 
-    def test_interactive_composer_height_clamps_to_min_and_max(self) -> None:
-        self.assertEqual(_interactive_composer_height(""), INTERACTIVE_COMPOSER_MIN_LINES)
-        self.assertEqual(_interactive_composer_height("crawl"), INTERACTIVE_COMPOSER_MIN_LINES)
-
-        tall_text = "\n".join(f"line-{idx}" for idx in range(20))
-        self.assertEqual(_interactive_composer_height(tall_text), INTERACTIVE_COMPOSER_MAX_LINES)
-
     def test_interactive_help_hint_text(self) -> None:
         self.assertEqual(_interactive_help_hint_text(), "Type 'help' or 'help-zh'")
+
+    def test_clear_db_runs_as_background_interactive_command(self) -> None:
+        self.assertIn("clear-db", INTERACTIVE_BACKGROUND_COMMANDS)
+
+    def test_interactive_game_slugs_status_text_uses_sync_state_update_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                storage.upsert_game_slugs(
+                    [("demo-game", "https://example.com/game/demo-game", "https://example.com/games.xml")]
+                )
+                storage.conn.execute(
+                    "UPDATE game_slugs SET last_seen_at = ? WHERE slug = ?",
+                    ("2026-03-11T08:30:00+00:00", "demo-game"),
+                )
+                storage.conn.commit()
+                storage.set_state(
+                    GAME_SLUGS_LAST_FULL_SYNC_AT_STATE_KEY,
+                    "2026-03-11T09:45:00+00:00",
+                )
+            finally:
+                storage.close()
+
+            self.assertEqual(
+                _interactive_game_slugs_status_text(str(db_path)),
+                "game_slugs total=1 | last full sync=2026-03-11 09:45:00+00:00",
+            )
+
+    def test_interactive_game_slugs_status_text_handles_missing_sync_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                storage.upsert_game_slugs(
+                    [("demo-game", "https://example.com/game/demo-game", "https://example.com/games.xml")]
+                )
+                storage.conn.execute(
+                    "UPDATE game_slugs SET last_seen_at = ? WHERE slug = ?",
+                    ("2026-03-11T08:30:00+00:00", "demo-game"),
+                )
+                storage.conn.commit()
+            finally:
+                storage.close()
+
+            self.assertEqual(
+                _interactive_game_slugs_status_text(str(db_path)),
+                "game_slugs total=1 | last full sync=never",
+            )
+
+    def test_interactive_game_slugs_status_text_handles_missing_db(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_db_path = Path(tmpdir) / "missing.db"
+            self.assertEqual(
+                _interactive_game_slugs_status_text(str(missing_db_path)),
+                "game_slugs total=0 | last full sync=never",
+            )
 
     def test_interactive_command_is_running_clears_finished_thread(self) -> None:
         worker = threading.Thread(target=lambda: None)
@@ -457,10 +636,6 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
         self.assertIsNone(app.renderer._last_cursor_shape)
         self.assertTrue(app.invalidated)
-
-    def test_format_interactive_command_echo_preserves_multiline_alignment(self) -> None:
-        echoed = _format_interactive_command_echo("set db data/demo.db\nshow")
-        self.assertEqual(echoed, "metacritic> set db data/demo.db\n            show")
 
     def test_style_output_line_for_settings(self) -> None:
         fragments = _style_output_line("db = data/metacritic.db  # Path to the SQLite database file")

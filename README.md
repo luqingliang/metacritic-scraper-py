@@ -52,6 +52,7 @@ Inside interactive shell:
 show
 help-zh
 show-zh
+clear-db
 set db data/metacritic.db
 set concurrency 4
 crawl
@@ -63,7 +64,8 @@ exit
 
 For easier out-of-box usage, `crawl` and interactive mode now use a quick-start profile by default:
 
-- `include_reviews = false`
+- `include_critic_reviews = false`
+- `include_user_reviews = false`
 - `max_review_pages = 1`
 - `concurrency = 4`
 
@@ -72,13 +74,13 @@ Full crawl now processes all slugs stored in `game_slugs` by default.
 2) Crawl one game:
 
 ```bash
-metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild --db data/metacritic.db --include-reviews --max-review-pages 2
+metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild --db data/metacritic.db --include-critic-reviews --include-user-reviews --max-review-pages 2
 ```
 
 3) Crawl all stored `game_slugs`:
 
 ```bash
-metacritic-scraper crawl --db data/metacritic.db --include-reviews --max-review-pages 1
+metacritic-scraper crawl --db data/metacritic.db --include-critic-reviews --include-user-reviews --max-review-pages 1
 ```
 
 Optional: download cover image files while crawling (disabled by default).
@@ -90,7 +92,7 @@ metacritic-scraper crawl --db data/metacritic.db --download-covers --covers-dir 
 Optional: enable concurrent workers (for example 4 workers).
 
 ```bash
-metacritic-scraper crawl --concurrency 4 --db data/metacritic.db --include-reviews
+metacritic-scraper crawl --concurrency 4 --db data/metacritic.db --include-critic-reviews --include-user-reviews
 ```
 
 4) Sync all sitemap slugs into SQLite:
@@ -111,6 +113,12 @@ metacritic-scraper download-covers --db data/metacritic.db --output-dir data/cov
 metacritic-scraper export-excel --db data/metacritic.db --output data/excel/metacritic_export.xlsx
 ```
 
+7) Clear all project tables while keeping the schema:
+
+```bash
+metacritic-scraper clear-db --db data/metacritic.db
+```
+
 ## CLI Overview
 
 ```bash
@@ -120,6 +128,7 @@ metacritic-scraper crawl-one --help
 metacritic-scraper sync-slugs --help
 metacritic-scraper download-covers --help
 metacritic-scraper export-excel --help
+metacritic-scraper clear-db --help
 metacritic-scraper interactive --help
 ```
 

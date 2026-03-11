@@ -93,7 +93,8 @@ class MetacriticScraper:
         self,
         slugs: Iterable[str],
         *,
-        include_reviews: bool,
+        include_critic_reviews: bool,
+        include_user_reviews: bool,
         review_page_size: int,
         max_review_pages: int | None,
         concurrency: int,
@@ -111,7 +112,8 @@ class MetacriticScraper:
                     self._check_stopped()
                     one = self.crawl_slug(
                         slug,
-                        include_reviews=include_reviews,
+                        include_critic_reviews=include_critic_reviews,
+                        include_user_reviews=include_user_reviews,
                         review_page_size=review_page_size,
                         max_review_pages=max_review_pages,
                         cover_downloader=cover_downloader,
@@ -176,7 +178,8 @@ class MetacriticScraper:
                     future = pool.submit(
                         self.crawl_slug,
                         slug,
-                        include_reviews=include_reviews,
+                        include_critic_reviews=include_critic_reviews,
+                        include_user_reviews=include_user_reviews,
                         review_page_size=review_page_size,
                         max_review_pages=max_review_pages,
                         cover_downloader=cover_downloader,
@@ -203,7 +206,8 @@ class MetacriticScraper:
         self,
         slug: str,
         *,
-        include_reviews: bool,
+        include_critic_reviews: bool,
+        include_user_reviews: bool,
         review_page_size: int,
         max_review_pages: int | None,
         cover_downloader: CoverImageDownloader | None = None,
@@ -267,57 +271,60 @@ class MetacriticScraper:
                 result.covers_failed += 1
                 logger.warning("cover download failed for slug=%s url=%s", slug, cover_url)
 
-        if not include_reviews:
+        if not include_critic_reviews and not include_user_reviews:
             return result
 
-        critic_buffer: list[dict] = []
-        try:
-            for review in self.client.iter_reviews(
-                slug=slug,
-                review_type="critic",
-                page_size=review_page_size,
-                max_pages=max_review_pages,
-            ):
-                self._check_stopped()
-                critic_buffer.append(review)
-                if len(critic_buffer) >= 200:
-                    result.critic_reviews_saved += self.storage.upsert_critic_reviews(slug, critic_buffer)
-                    critic_buffer.clear()
-        except MetacriticClientError as exc:
-            logger.warning("critic reviews unavailable for %s: %s", slug, exc)
-        except InterruptedError:
-            result.stopped = True
-            return result
-        if critic_buffer:
-            result.critic_reviews_saved += self.storage.upsert_critic_reviews(slug, critic_buffer)
+        if include_critic_reviews:
+            critic_buffer: list[dict] = []
+            try:
+                for review in self.client.iter_reviews(
+                    slug=slug,
+                    review_type="critic",
+                    page_size=review_page_size,
+                    max_pages=max_review_pages,
+                ):
+                    self._check_stopped()
+                    critic_buffer.append(review)
+                    if len(critic_buffer) >= 200:
+                        result.critic_reviews_saved += self.storage.upsert_critic_reviews(slug, critic_buffer)
+                        critic_buffer.clear()
+            except MetacriticClientError as exc:
+                logger.warning("critic reviews unavailable for %s: %s", slug, exc)
+            except InterruptedError:
+                result.stopped = True
+                return result
+            if critic_buffer:
+                result.critic_reviews_saved += self.storage.upsert_critic_reviews(slug, critic_buffer)
 
-        user_buffer: list[dict] = []
-        try:
-            for review in self.client.iter_reviews(
-                slug=slug,
-                review_type="user",
-                page_size=review_page_size,
-                max_pages=max_review_pages,
-            ):
-                self._check_stopped()
-                user_buffer.append(review)
-                if len(user_buffer) >= 200:
-                    result.user_reviews_saved += self.storage.upsert_user_reviews(slug, user_buffer)
-                    user_buffer.clear()
-        except MetacriticClientError as exc:
-            logger.warning("user reviews unavailable for %s: %s", slug, exc)
-        except InterruptedError:
-            result.stopped = True
-            return result
-        if user_buffer:
-            result.user_reviews_saved += self.storage.upsert_user_reviews(slug, user_buffer)
+        if include_user_reviews:
+            user_buffer: list[dict] = []
+            try:
+                for review in self.client.iter_reviews(
+                    slug=slug,
+                    review_type="user",
+                    page_size=review_page_size,
+                    max_pages=max_review_pages,
+                ):
+                    self._check_stopped()
+                    user_buffer.append(review)
+                    if len(user_buffer) >= 200:
+                        result.user_reviews_saved += self.storage.upsert_user_reviews(slug, user_buffer)
+                        user_buffer.clear()
+            except MetacriticClientError as exc:
+                logger.warning("user reviews unavailable for %s: %s", slug, exc)
+            except InterruptedError:
+                result.stopped = True
+                return result
+            if user_buffer:
+                result.user_reviews_saved += self.storage.upsert_user_reviews(slug, user_buffer)
 
         return result
 
     def crawl_from_sitemaps(
         self,
         *,
-        include_reviews: bool,
+        include_critic_reviews: bool,
+        include_user_reviews: bool,
         review_page_size: int,
         max_review_pages: int | None,
         concurrency: int = 4,
@@ -340,7 +347,8 @@ class MetacriticScraper:
 
         return self._crawl_slugs(
             full_crawl_slugs,
-            include_reviews=include_reviews,
+            include_critic_reviews=include_critic_reviews,
+            include_user_reviews=include_user_reviews,
             review_page_size=review_page_size,
             max_review_pages=max_review_pages,
             concurrency=concurrency,

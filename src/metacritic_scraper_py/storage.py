@@ -8,6 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+APP_TABLE_NAMES = (
+    "critic_reviews",
+    "user_reviews",
+    "games",
+    "game_slugs",
+    "sync_state",
+)
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -364,6 +372,17 @@ class SQLiteStorage:
         with self._lock:
             cursor = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}")
             return int(cursor.fetchone()[0])
+
+    def clear_all_tables(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        with self._lock:
+            for table_name in APP_TABLE_NAMES:
+                cursor = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}")
+                counts[table_name] = int(cursor.fetchone()[0])
+            for table_name in APP_TABLE_NAMES:
+                self.conn.execute(f"DELETE FROM {table_name}")
+            self.conn.commit()
+        return counts
 
     def list_game_cover_urls(
         self,

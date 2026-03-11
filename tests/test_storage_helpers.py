@@ -18,6 +18,70 @@ class StorageHelpersTestCase(unittest.TestCase):
             finally:
                 storage.close()
 
+    def test_clear_all_tables_deletes_rows_and_preserves_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                storage.upsert_game(
+                    slug="demo-game",
+                    product_payload={"data": {"item": {"id": 1, "title": "Demo"}}},
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url=None,
+                )
+                storage.upsert_critic_reviews(
+                    "demo-game",
+                    [
+                        {
+                            "publicationSlug": "demo-pub",
+                            "date": "2026-03-11",
+                            "score": 8,
+                            "url": "https://example.com/review",
+                            "quote": "great game",
+                            "author": "reviewer",
+                            "publicationName": "Demo Pub",
+                        }
+                    ],
+                )
+                storage.upsert_user_reviews(
+                    "demo-game",
+                    [
+                        {
+                            "id": "user-1",
+                            "author": "player",
+                            "date": "2026-03-11",
+                            "score": 9,
+                            "quote": "loved it",
+                            "spoiler": False,
+                        }
+                    ],
+                )
+                storage.upsert_game_slugs(
+                    [("demo-game", "https://example.com/game/demo-game", "https://example.com/games.xml")]
+                )
+                storage.set_state("checkpoint", "2026-03-11T00:00:00+00:00")
+
+                counts = storage.clear_all_tables()
+
+                self.assertEqual(
+                    counts,
+                    {
+                        "critic_reviews": 1,
+                        "user_reviews": 1,
+                        "games": 1,
+                        "game_slugs": 1,
+                        "sync_state": 1,
+                    },
+                )
+                for table_name in ("critic_reviews", "user_reviews", "games", "game_slugs", "sync_state"):
+                    self.assertEqual(storage.count_rows(table_name), 0)
+
+                storage.set_state("checkpoint", "2026-03-12T00:00:00+00:00")
+                self.assertEqual(storage.get_state("checkpoint"), "2026-03-12T00:00:00+00:00")
+            finally:
+                storage.close()
+
     def test_schema_migration_adds_cover_url_column(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "legacy.db"

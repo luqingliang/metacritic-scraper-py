@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shlex
+import sqlite3
 import sys
 import threading
 from contextlib import redirect_stdout
@@ -22,18 +23,18 @@ from .config import (
 from .cover_downloader import CoverImageDownloader
 from .exporter import export_sqlite_to_excel
 from .scraper import MetacriticScraper
-from .storage import SQLiteStorage
+from .storage import APP_TABLE_NAMES, SQLiteStorage
 
 DEFAULT_QUICKSTART_MAX_REVIEW_PAGES = 1
 DEFAULT_CONCURRENCY = 4
 DEFAULT_SLUG_SYNC_BATCH_SIZE = 500
 GAME_SLUGS_LAST_FULL_SYNC_AT_STATE_KEY = "game_slugs_last_successful_full_sync_at"
 GAME_SLUGS_FULL_SYNC_MAX_AGE = timedelta(days=7)
-INTERACTIVE_COMPOSER_MIN_LINES = 3
-INTERACTIVE_COMPOSER_MAX_LINES = 8
 INTERACTIVE_WELCOME_CONTENT_WIDTH = 74
 INTERACTIVE_WELCOME_LABEL_WIDTH = 28
 INTERACTIVE_WELCOME_TITLE = "METACRITIC SCRAPER"
+INTERACTIVE_BACKGROUND_COMMANDS = {"crawl", "crawl-one", "sync-slugs", "download-covers", "export-excel", "clear-db"}
+INTERACTIVE_STOPPABLE_COMMANDS = {"crawl", "crawl-one", "sync-slugs", "download-covers"}
 LOG_BULLET = "●"
 LOG_FORMAT = f"{LOG_BULLET} %(levelname)s%(progress_display)s - %(message)s"
 
@@ -57,10 +58,16 @@ def build_parser() -> argparse.ArgumentParser:
     crawl = subparsers.add_parser("crawl", help="Crawl games using slugs stored in SQLite.")
     crawl.add_argument("--db", default="data/metacritic.db", help="SQLite db path.")
     crawl.add_argument(
-        "--include-reviews",
+        "--include-critic-reviews",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Also crawl critic and user reviews (default: false).",
+        help="Also crawl critic reviews (default: false).",
+    )
+    crawl.add_argument(
+        "--include-user-reviews",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Also crawl user reviews (default: false).",
     )
     crawl.add_argument("--review-page-size", type=int, default=50, help="Reviews page size.")
     crawl.add_argument(
@@ -101,10 +108,16 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_one.add_argument("slug", help="Game slug.")
     crawl_one.add_argument("--db", default="data/metacritic.db", help="SQLite db path.")
     crawl_one.add_argument(
-        "--include-reviews",
+        "--include-critic-reviews",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Also crawl critic and user reviews (default: false).",
+        help="Also crawl critic reviews (default: false).",
+    )
+    crawl_one.add_argument(
+        "--include-user-reviews",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Also crawl user reviews (default: false).",
     )
     crawl_one.add_argument("--review-page-size", type=int, default=50, help="Reviews page size.")
     crawl_one.add_argument(
@@ -176,6 +189,12 @@ def build_parser() -> argparse.ArgumentParser:
     download_covers.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES, help="Retry attempts.")
     download_covers.add_argument("--backoff", type=float, default=DEFAULT_BACKOFF_SECONDS, help="Retry backoff base seconds.")
     download_covers.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS, help="Sleep between requests.")
+
+    clear_db = subparsers.add_parser(
+        "clear-db",
+        help="Delete all rows from all project SQLite tables while keeping the schema.",
+    )
+    clear_db.add_argument("--db", default="data/metacritic.db", help="SQLite db path.")
 
     subparsers.add_parser(
         "interactive",
@@ -310,7 +329,8 @@ def run_crawl(args: argparse.Namespace) -> int:
         with _build_client(args) as client:
             scraper = MetacriticScraper(client, storage, stop_event=stop_event)
             result = scraper.crawl_from_sitemaps(
-                include_reviews=args.include_reviews,
+                include_critic_reviews=bool(getattr(args, "include_critic_reviews", False)),
+                include_user_reviews=bool(getattr(args, "include_user_reviews", False)),
                 review_page_size=args.review_page_size,
                 max_review_pages=args.max_review_pages,
                 concurrency=args.concurrency,
@@ -377,7 +397,8 @@ def run_crawl_one(args: argparse.Namespace) -> int:
             )
             result = scraper.crawl_slug(
                 args.slug,
-                include_reviews=args.include_reviews,
+                include_critic_reviews=bool(getattr(args, "include_critic_reviews", False)),
+                include_user_reviews=bool(getattr(args, "include_user_reviews", False)),
                 review_page_size=args.review_page_size,
                 max_review_pages=args.max_review_pages,
                 cover_downloader=cover_downloader,
@@ -630,10 +651,72 @@ def run_download_covers(args: argparse.Namespace) -> int:
         storage.close()
 
 
+def _clear_db_summary_text(counts: dict[str, int]) -> str:
+    total = sum(counts.values())
+    return (
+        "clear-db summary: critic_reviews=%d user_reviews=%d games=%d game_slugs=%d sync_state=%d total=%d"
+        % (
+            counts.get("critic_reviews", 0),
+            counts.get("user_reviews", 0),
+            counts.get("games", 0),
+            counts.get("game_slugs", 0),
+            counts.get("sync_state", 0),
+            total,
+        )
+    )
+
+
+def _validate_existing_project_db_for_clear(db_path: str) -> str | None:
+    normalized_db_path = str(db_path).strip()
+    if not normalized_db_path:
+        return "clear-db requires a non-empty database path."
+    if not os.path.isfile(normalized_db_path):
+        return f"clear-db requires an existing project database file: {normalized_db_path}"
+
+    try:
+        conn = sqlite3.connect(normalized_db_path)
+        try:
+            rows = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return f"clear-db cannot open project database {normalized_db_path}: {exc}"
+
+    existing_tables = {str(row[0]) for row in rows}
+    missing_tables = [table_name for table_name in APP_TABLE_NAMES if table_name not in existing_tables]
+    if missing_tables:
+        return (
+            "clear-db requires an initialized project database; missing tables: "
+            + ", ".join(missing_tables)
+        )
+
+    return None
+
+
+def run_clear_db(args: argparse.Namespace) -> int:
+    validation_error = _validate_existing_project_db_for_clear(args.db)
+    if validation_error is not None:
+        logging.error(validation_error)
+        return 2
+
+    storage = SQLiteStorage(args.db)
+    try:
+        counts = storage.clear_all_tables()
+        logging.info("%s db=%s", _clear_db_summary_text(counts), args.db)
+        if bool(getattr(args, "print_summary", False)):
+            print(_clear_db_summary_text(counts))
+        return 0
+    finally:
+        storage.close()
+
+
 def _interactive_defaults() -> dict[str, object]:
     return {
         "db": "data/metacritic.db",
-        "include_reviews": False,
+        "include_critic_reviews": False,
+        "include_user_reviews": False,
         "review_page_size": 50,
         "max_review_pages": DEFAULT_QUICKSTART_MAX_REVIEW_PAGES,
         "concurrency": DEFAULT_CONCURRENCY,
@@ -658,7 +741,7 @@ def _parse_bool(raw: str) -> bool:
 
 
 def _convert_setting_value(key: str, raw_value: str) -> object:
-    bool_keys = {"include_reviews", "download_covers", "overwrite_covers"}
+    bool_keys = {"include_critic_reviews", "include_user_reviews", "download_covers", "overwrite_covers"}
     int_keys = {
         "review_page_size",
         "concurrency",
@@ -684,10 +767,9 @@ def _convert_setting_value(key: str, raw_value: str) -> object:
 def _print_interactive_help() -> str:
     lines = [
         "Interactive commands:",
-        "  help                              Show help",
-        "  help-zh | 帮助                    Show Chinese annotated help",
-        "  show-zh | 配置                    Show settings with Chinese explanations",
-        "  show                              Show settings with English explanations",
+        "  help | help-zh                    Show help in English or Chinese",
+        "  show | show-zh                    Show settings with English or Chinese explanations",
+        "  clear-db                          Delete all rows from all SQLite tables",
         "  set <key> <value>                 Update setting (use 'none' for null)",
         "  reset                             Reset settings to defaults",
         "  stop                              Request stop for the current background crawl/download task",
@@ -700,7 +782,8 @@ def _print_interactive_help() -> str:
         "",
         "Examples:",
         "  set db data/metacritic.db",
-        "  set include_reviews true",
+        "  set include_critic_reviews true",
+        "  set include_user_reviews true",
         "  set concurrency 4",
         "  set download_covers true",
         "  crawl",
@@ -714,10 +797,9 @@ def _print_interactive_help() -> str:
 def _print_interactive_help_zh() -> str:
     lines = [
         "交互命令（中文释义）:",
-        "  help                              显示英文帮助",
-        "  help-zh | 帮助                    显示中文释义帮助",
-        "  show-zh | 配置                    显示带中文说明的参数列表",
-        "  show                              显示带英文说明的参数列表",
+        "  help | help-zh                    显示英文或中文释义帮助",
+        "  show | show-zh                    显示带英文或中文说明的参数列表",
+        "  clear-db                          清空所有 SQLite 业务表中的数据并保留表结构",
         "  set <key> <value>                 修改配置（null/none 表示空值）",
         "  reset                             重置为默认配置",
         "  stop                              请求停止当前后台抓取/下载任务",
@@ -730,7 +812,8 @@ def _print_interactive_help_zh() -> str:
         "",
         "示例:",
         "  help-zh",
-        "  set include_reviews true",
+        "  set include_critic_reviews true",
+        "  set include_user_reviews true",
         "  set concurrency 4",
         "  crawl",
         "  sync-slugs",
@@ -749,7 +832,8 @@ def _setting_explanations_en() -> dict[str, str]:
         "delay": "Fixed delay in seconds between requests",
         "download_covers": "Whether to download cover image files during crawl",
         "export_output": "Default output path for Excel export",
-        "include_reviews": "Whether to crawl critic and user reviews",
+        "include_critic_reviews": "Whether to crawl critic reviews",
+        "include_user_reviews": "Whether to crawl user reviews",
         "max_retries": "Maximum retry attempts for failed requests",
         "max_review_pages": "Maximum review pages per review type",
         "overwrite_covers": "Whether to overwrite existing cover image files",
@@ -775,7 +859,8 @@ def _setting_explanations_zh() -> dict[str, str]:
         "delay": "每次请求之间的固定等待秒数",
         "download_covers": "抓取游戏时是否同时下载封面图片实体",
         "export_output": "导出 Excel 的默认输出路径",
-        "include_reviews": "是否抓取媒体评论和用户评论",
+        "include_critic_reviews": "是否抓取媒体评论",
+        "include_user_reviews": "是否抓取用户评论",
         "max_retries": "请求失败后的最大重试次数",
         "max_review_pages": "每类评论最多翻页数",
         "overwrite_covers": "下载封面时是否覆盖本地已有文件",
@@ -976,16 +1061,58 @@ def _interactive_welcome_fragments() -> list[tuple[str, str]]:
     return fragments
 
 
-def _interactive_composer_height(text: str) -> int:
-    logical_lines = max(1, str(text).count("\n") + 1)
-    return max(
-        INTERACTIVE_COMPOSER_MIN_LINES,
-        min(INTERACTIVE_COMPOSER_MAX_LINES, logical_lines),
-    )
-
-
 def _interactive_help_hint_text() -> str:
     return "Type 'help' or 'help-zh'"
+
+
+def _format_interactive_game_slugs_updated_at(value: object) -> str:
+    if value is None:
+        return "never"
+
+    parsed = _parse_checkpoint_datetime(value)
+    if parsed is not None:
+        return parsed.isoformat(sep=" ", timespec="seconds")
+
+    normalized = str(value).strip()
+    return normalized or "never"
+
+
+def _interactive_game_slugs_status_text(db_path: str) -> str:
+    normalized_db_path = str(db_path).strip()
+    if not normalized_db_path or not os.path.exists(normalized_db_path):
+        return "game_slugs total=0 | last full sync=never"
+
+    try:
+        conn = sqlite3.connect(normalized_db_path)
+        try:
+            try:
+                total_row = conn.execute("SELECT COUNT(*) FROM game_slugs").fetchone()
+            except sqlite3.Error as exc:
+                if "no such table" in str(exc).lower():
+                    total_row = (0,)
+                else:
+                    raise
+
+            try:
+                state_row = conn.execute(
+                    "SELECT state_value FROM sync_state WHERE state_key = ?",
+                    (GAME_SLUGS_LAST_FULL_SYNC_AT_STATE_KEY,),
+                ).fetchone()
+            except sqlite3.Error as exc:
+                if "no such table" in str(exc).lower():
+                    state_row = None
+                else:
+                    raise
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        if "no such table" in str(exc).lower():
+            return "game_slugs total=0 | last full sync=never"
+        return "game_slugs total=unavailable | last full sync=unavailable"
+
+    total = int((total_row or (0,))[0] or 0)
+    last_updated = _format_interactive_game_slugs_updated_at(state_row[0] if state_row else None)
+    return f"game_slugs total={total} | last full sync={last_updated}"
 
 
 def _interactive_command_is_running(running_command: dict[str, object | None]) -> bool:
@@ -1015,20 +1142,6 @@ def _refresh_interactive_cursor_blink(app: object) -> None:
     invalidate = getattr(app, "invalidate", None)
     if callable(invalidate):
         invalidate()
-
-
-def _format_interactive_command_echo(text: str) -> str:
-    stripped = str(text).strip()
-    if not stripped:
-        return "metacritic>"
-
-    lines = stripped.splitlines()
-    prefix = "metacritic> "
-    continuation = " " * len(prefix)
-    rendered = [f"{prefix}{lines[0]}"]
-    for line in lines[1:]:
-        rendered.append(f"{continuation}{line}")
-    return "\n".join(rendered)
 
 
 def _run_with_captured_stdout(
@@ -1068,8 +1181,13 @@ def _run_interactive_command(
     emit: Callable[[str], None],
     *,
     request_stop: Callable[[], str] | None = None,
+    refresh_game_slugs_status: Callable[[], None] | None = None,
     stop_event: threading.Event | None = None,
 ) -> bool:
+    def _refresh_status_if_needed() -> None:
+        if refresh_game_slugs_status is not None:
+            refresh_game_slugs_status()
+
     cmd = tokens[0].lower()
     args = tokens[1:]
 
@@ -1096,7 +1214,21 @@ def _run_interactive_command(
     if cmd == "reset":
         settings.clear()
         settings.update(_interactive_defaults())
+        _refresh_status_if_needed()
         emit("Settings reset.")
+        return True
+    if cmd == "clear-db":
+        if args:
+            emit("Usage: clear-db")
+            return True
+        ns = argparse.Namespace(
+            db=settings["db"],
+            print_summary=True,
+        )
+        try:
+            _run_with_captured_stdout(run_clear_db, ns, emit)
+        finally:
+            _refresh_status_if_needed()
         return True
     if cmd == "stop":
         if request_stop is None:
@@ -1120,6 +1252,8 @@ def _run_interactive_command(
             emit(f"Cannot set value: {exc}")
             return True
         settings[key] = value
+        if key == "db":
+            _refresh_status_if_needed()
         emit(f"Updated: {key}={value}")
         return True
 
@@ -1127,7 +1261,8 @@ def _run_interactive_command(
         if cmd == "crawl":
             ns = argparse.Namespace(
                 db=settings["db"],
-                include_reviews=settings["include_reviews"],
+                include_critic_reviews=settings["include_critic_reviews"],
+                include_user_reviews=settings["include_user_reviews"],
                 review_page_size=settings["review_page_size"],
                 max_review_pages=settings["max_review_pages"],
                 concurrency=settings["concurrency"],
@@ -1141,7 +1276,10 @@ def _run_interactive_command(
                 print_summary=True,
                 stop_event=stop_event,
             )
-            _run_with_captured_stdout(run_crawl, ns, emit)
+            try:
+                _run_with_captured_stdout(run_crawl, ns, emit)
+            finally:
+                _refresh_status_if_needed()
             return True
 
         if cmd == "crawl-one":
@@ -1152,7 +1290,8 @@ def _run_interactive_command(
             ns = argparse.Namespace(
                 slug=slug,
                 db=settings["db"],
-                include_reviews=settings["include_reviews"],
+                include_critic_reviews=settings["include_critic_reviews"],
+                include_user_reviews=settings["include_user_reviews"],
                 review_page_size=settings["review_page_size"],
                 max_review_pages=settings["max_review_pages"],
                 timeout=settings["timeout"],
@@ -1193,7 +1332,10 @@ def _run_interactive_command(
                 print_summary=True,
                 stop_event=stop_event,
             )
-            _run_with_captured_stdout(run_sync_slugs, ns, emit)
+            try:
+                _run_with_captured_stdout(run_sync_slugs, ns, emit)
+            finally:
+                _refresh_status_if_needed()
             return True
 
         if cmd == "export-excel":
@@ -1254,9 +1396,13 @@ def run_interactive() -> int:
         from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
         from prompt_toolkit import PromptSession, print_formatted_text
         from prompt_toolkit.cursor_shapes import CursorShape
+        from prompt_toolkit.filters import is_done
         from prompt_toolkit.formatted_text import FormattedText
         from prompt_toolkit.history import InMemoryHistory
         from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.layout import Window
+        from prompt_toolkit.layout.containers import ConditionalContainer
+        from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.patch_stdout import patch_stdout
         from prompt_toolkit.styles import Style
     except Exception:
@@ -1292,15 +1438,46 @@ def run_interactive() -> int:
         {
             "prompt": "bold ansicyan",
             "placeholder": "ansibrightblack",
+            "toolbar.status": "ansibrightblack",
         }
     )
 
     previous_no_cpr = os.environ.get("PROMPT_TOOLKIT_NO_CPR")
     os.environ["PROMPT_TOOLKIT_NO_CPR"] = "1"
 
-    session = PromptSession(history=InMemoryHistory())
+    status_state = {"text": _interactive_game_slugs_status_text(str(settings["db"]))}
+
+    class _InteractivePromptSession(PromptSession):
+        def _create_layout(self):
+            layout = super()._create_layout()
+            container = getattr(layout, "container", None)
+            children = getattr(container, "children", None)
+            if isinstance(children, list):
+                children.insert(
+                    1,
+                    ConditionalContainer(
+                        Window(
+                            FormattedTextControl(
+                                lambda: [("class:toolbar.status", f"  {status_state['text']}")]
+                            ),
+                            dont_extend_height=True,
+                            height=1,
+                        ),
+                        filter=~is_done,
+                    ),
+                )
+            return layout
+
+    session = _InteractivePromptSession(history=InMemoryHistory())
 
     kb = KeyBindings()
+
+    def _refresh_interactive_game_slugs_status() -> None:
+        status_state["text"] = _interactive_game_slugs_status_text(str(settings["db"]))
+        app = getattr(session, "app", None)
+        invalidate = getattr(app, "invalidate", None)
+        if callable(invalidate):
+            invalidate()
 
     def emit_output(message: str) -> None:
         with output_lock:
@@ -1309,14 +1486,12 @@ def run_interactive() -> int:
                 style=output_style,
             )
 
-    stoppable_commands = {"crawl", "crawl-one", "sync-slugs", "download-covers"}
-
     def _request_stop_current_command() -> str:
         if not _interactive_command_is_running(running_command):
             return "No background command is running."
 
         command_name = str(running_command.get("name") or "")
-        if command_name not in stoppable_commands:
+        if command_name not in INTERACTIVE_STOPPABLE_COMMANDS:
             return f"[stop] command cannot be interrupted: {command_name}"
         if stop_event.is_set():
             return f"[stopping] stop already requested for {command_name}"
@@ -1337,6 +1512,7 @@ def run_interactive() -> int:
                     tokens,
                     settings,
                     emit_output,
+                    refresh_game_slugs_status=_refresh_interactive_game_slugs_status,
                     stop_event=stop_event,
                 )
             finally:
@@ -1381,7 +1557,6 @@ def run_interactive() -> int:
     root_logger.addHandler(ui_handler)
     root_logger.setLevel(previous_level)
 
-    background_commands = {"crawl", "crawl-one", "sync-slugs", "download-covers", "export-excel"}
     with output_lock:
         print_formatted_text(
             FormattedText(_interactive_welcome_fragments()),
@@ -1417,7 +1592,7 @@ def run_interactive() -> int:
                     continue
 
                 cmd = tokens[0].lower()
-                if cmd in background_commands:
+                if cmd in INTERACTIVE_BACKGROUND_COMMANDS:
                     _run_command_in_background(tokens)
                     continue
 
@@ -1426,6 +1601,7 @@ def run_interactive() -> int:
                     settings,
                     emit_output,
                     request_stop=_request_stop_current_command,
+                    refresh_game_slugs_status=_refresh_interactive_game_slugs_status,
                 ):
                     return 0
     finally:
@@ -1456,5 +1632,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_export_excel(args)
     if args.command == "download-covers":
         return run_download_covers(args)
+    if args.command == "clear-db":
+        return run_clear_db(args)
     parser.error(f"unknown command: {args.command}")
     return 2
