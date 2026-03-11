@@ -10,6 +10,24 @@ and this project follows [Semantic Versioning](https://semver.org/).
 ### Added
 - Planned: multi-domain crawling support (Movies / TV Shows / Music).
 
+## [0.1.7] - 2026-03-11
+
+### Added
+- New `sync-slugs` command to sync game slugs from Metacritic sitemaps into SQLite.
+- Automatic slug sync before `crawl` when the stored sitemap checkpoint is missing, invalid, or stale.
+- New `clear-db` command to delete project data while keeping the SQLite schema intact.
+- Regression coverage for full crawl, slug sync, and storage helper flows.
+
+### Changed
+- `crawl` now reads from stored SQLite slugs by default, separates critic/user review switches, and defaults to concurrency `4`.
+- Interactive mode now exposes slug sync status and supports `sync-slugs`, `export-excel`, and `clear-db` workflows directly.
+- Excel export now defaults to `data/excel/metacritic_export.xlsx`.
+
+### Fixed
+- Crawl progress logs now include per-slug completion counters and clearer stop/failure states.
+- Review crawling now tolerates critic and user review availability independently.
+- Slug sync upserts now deduplicate repeated sitemap entries before writing to SQLite.
+
 ## [0.1.6] - 2026-03-09
 
 ### Added
@@ -94,7 +112,8 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - SQLite-based storage for crawled game data.
 - Core CLI commands for crawling and basic data operations.
 
-[Unreleased]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.3...v0.1.4
