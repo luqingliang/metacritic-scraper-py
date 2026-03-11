@@ -559,6 +559,13 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             db_path = Path(tmpdir) / "test.db"
             storage = SQLiteStorage(db_path)
             try:
+                storage.upsert_game(
+                    slug="demo-game",
+                    product_payload={"data": {"item": {"id": 1, "title": "Demo"}}},
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url=None,
+                )
                 storage.upsert_game_slugs(
                     [("demo-game", "https://example.com/game/demo-game", "https://example.com/games.xml")]
                 )
@@ -576,7 +583,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
             self.assertEqual(
                 _interactive_game_slugs_status_text(str(db_path)),
-                "game_slugs total=1 | last full sync=2026-03-11 09:45:00+00:00",
+                "games total=1 | game_slugs total=1 | last full sync=2026-03-11",
             )
 
     def test_interactive_game_slugs_status_text_handles_missing_sync_state(self) -> None:
@@ -584,6 +591,13 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             db_path = Path(tmpdir) / "test.db"
             storage = SQLiteStorage(db_path)
             try:
+                storage.upsert_game(
+                    slug="demo-game",
+                    product_payload={"data": {"item": {"id": 1, "title": "Demo"}}},
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url=None,
+                )
                 storage.upsert_game_slugs(
                     [("demo-game", "https://example.com/game/demo-game", "https://example.com/games.xml")]
                 )
@@ -597,7 +611,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
             self.assertEqual(
                 _interactive_game_slugs_status_text(str(db_path)),
-                "game_slugs total=1 | last full sync=never",
+                "games total=1 | game_slugs total=1 | last full sync=never",
             )
 
     def test_interactive_game_slugs_status_text_handles_missing_db(self) -> None:
@@ -605,7 +619,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             missing_db_path = Path(tmpdir) / "missing.db"
             self.assertEqual(
                 _interactive_game_slugs_status_text(str(missing_db_path)),
-                "game_slugs total=0 | last full sync=never",
+                "games total=0 | game_slugs total=0 | last full sync=never",
             )
 
     def test_interactive_command_is_running_clears_finished_thread(self) -> None:

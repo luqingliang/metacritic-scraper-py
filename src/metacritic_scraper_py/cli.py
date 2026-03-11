@@ -1071,7 +1071,7 @@ def _format_interactive_game_slugs_updated_at(value: object) -> str:
 
     parsed = _parse_checkpoint_datetime(value)
     if parsed is not None:
-        return parsed.isoformat(sep=" ", timespec="seconds")
+        return parsed.date().isoformat()
 
     normalized = str(value).strip()
     return normalized or "never"
@@ -1080,11 +1080,19 @@ def _format_interactive_game_slugs_updated_at(value: object) -> str:
 def _interactive_game_slugs_status_text(db_path: str) -> str:
     normalized_db_path = str(db_path).strip()
     if not normalized_db_path or not os.path.exists(normalized_db_path):
-        return "game_slugs total=0 | last full sync=never"
+        return "games total=0 | game_slugs total=0 | last full sync=never"
 
     try:
         conn = sqlite3.connect(normalized_db_path)
         try:
+            try:
+                games_row = conn.execute("SELECT COUNT(*) FROM games").fetchone()
+            except sqlite3.Error as exc:
+                if "no such table" in str(exc).lower():
+                    games_row = (0,)
+                else:
+                    raise
+
             try:
                 total_row = conn.execute("SELECT COUNT(*) FROM game_slugs").fetchone()
             except sqlite3.Error as exc:
@@ -1107,12 +1115,13 @@ def _interactive_game_slugs_status_text(db_path: str) -> str:
             conn.close()
     except sqlite3.Error as exc:
         if "no such table" in str(exc).lower():
-            return "game_slugs total=0 | last full sync=never"
-        return "game_slugs total=unavailable | last full sync=unavailable"
+            return "games total=0 | game_slugs total=0 | last full sync=never"
+        return "games total=unavailable | game_slugs total=unavailable | last full sync=unavailable"
 
+    games_total = int((games_row or (0,))[0] or 0)
     total = int((total_row or (0,))[0] or 0)
     last_updated = _format_interactive_game_slugs_updated_at(state_row[0] if state_row else None)
-    return f"game_slugs total={total} | last full sync={last_updated}"
+    return f"games total={games_total} | game_slugs total={total} | last full sync={last_updated}"
 
 
 def _interactive_command_is_running(running_command: dict[str, object | None]) -> bool:
