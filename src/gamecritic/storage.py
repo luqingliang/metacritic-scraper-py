@@ -25,6 +25,81 @@ def _json_dumps(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
+def _merge_slug_search_candidates(
+    games_rows: Iterable[tuple[object, object]],
+    slug_rows: Iterable[tuple[object]],
+) -> list[tuple[str, str | None]]:
+    by_slug: dict[str, str | None] = {}
+
+    for row in games_rows:
+        slug = str(row[0]).strip()
+        if not slug:
+            continue
+        title = row[1]
+        normalized_title = str(title).strip() if title is not None else None
+        by_slug[slug] = normalized_title or None
+
+    for row in slug_rows:
+        slug = str(row[0]).strip()
+        if not slug or slug in by_slug:
+            continue
+        by_slug[slug] = None
+
+    return sorted(by_slug.items(), key=lambda item: item[0])
+
+
+def _query_slug_search_candidates(conn: sqlite3.Connection) -> list[tuple[str, str | None]]:
+    try:
+        games_rows = conn.execute(
+            """
+            SELECT slug, title
+            FROM games
+            WHERE slug IS NOT NULL AND TRIM(slug) != ''
+            ORDER BY slug ASC
+            """
+        ).fetchall()
+    except sqlite3.Error as exc:
+        if "no such table" in str(exc).lower():
+            games_rows = []
+        else:
+            raise
+
+    try:
+        slug_rows = conn.execute(
+            """
+            SELECT slug
+            FROM game_slugs
+            WHERE slug IS NOT NULL AND TRIM(slug) != ''
+            ORDER BY sitemap_url ASC, slug ASC
+            """
+        ).fetchall()
+    except sqlite3.Error as exc:
+        if "no such table" in str(exc).lower():
+            slug_rows = []
+        else:
+            raise
+
+    return _merge_slug_search_candidates(games_rows, slug_rows)
+
+
+def load_slug_search_candidates_from_db(
+    db_path: str | Path,
+) -> list[tuple[str, str | None]]:
+    normalized_db_path = str(db_path).strip()
+    if not normalized_db_path:
+        return []
+
+    db_file = Path(normalized_db_path)
+    if not db_file.is_file():
+        return []
+
+    conn = sqlite3.connect(f"{db_file.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        return _query_slug_search_candidates(conn)
+    finally:
+        conn.close()
+
+
 def _critic_review_key(review: dict) -> str:
     parts = [
         str(review.get("publicationSlug") or ""),
@@ -382,6 +457,12 @@ class SQLiteStorage:
             cursor = self.conn.execute(query)
             rows = cursor.fetchall()
         return [str(row[0]) for row in rows]
+
+    def list_slug_search_candidates(
+        self,
+    ) -> list[tuple[str, str | None]]:
+        with self._lock:
+            return _query_slug_search_candidates(self.conn)
 
     def count_rows(self, table_name: str) -> int:
         with self._lock:
