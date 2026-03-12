@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from metacritic_scraper_py.cli import (
+from gamecritic.cli import (
     DEFAULT_CONCURRENCY,
     DEFAULT_QUICKSTART_MAX_REVIEW_PAGES,
     INTERACTIVE_BACKGROUND_COMMANDS,
@@ -44,9 +44,9 @@ from metacritic_scraper_py.cli import (
     run_download_covers,
     run_sync_slugs,
 )
-from metacritic_scraper_py.client import MetacriticClientError
-from metacritic_scraper_py.scraper import CrawlResult, MetacriticScraper
-from metacritic_scraper_py.storage import SQLiteStorage
+from gamecritic.client import MetacriticClientError
+from gamecritic.scraper import CrawlResult, MetacriticScraper
+from gamecritic.storage import SQLiteStorage
 
 
 class InteractiveCliParsingTestCase(unittest.TestCase):
@@ -61,7 +61,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             captured["print_summary"] = getattr(namespace, "print_summary", None)
             emit("[done] exit_code=0")
 
-        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
             keep_running = _run_interactive_command(["crawl"], settings, output.append)
 
         self.assertTrue(keep_running)
@@ -80,7 +80,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             captured["print_summary"] = getattr(namespace, "print_summary", None)
             emit("[done] exit_code=0")
 
-        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
             keep_running = _run_interactive_command(["crawl-one", "demo-game"], settings, output.append)
 
         self.assertTrue(keep_running)
@@ -235,7 +235,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertFalse(settings["download_covers"])
         self.assertEqual(settings["covers_dir"], "data/covers")
         self.assertFalse(settings["overwrite_covers"])
-        self.assertEqual(settings["export_output"], "data/excel/metacritic_export.xlsx")
+        self.assertEqual(settings["export_output"], "data/excel/gamecritic_export.xlsx")
         self.assertNotIn("include_raw_json", settings)
 
     def test_set_command_persists_shared_settings(self) -> None:
@@ -243,7 +243,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         output: list[str] = []
 
         with tempfile.TemporaryDirectory() as tmpdir, patch(
-            "metacritic_scraper_py.cli.SHARED_SETTINGS_PATH",
+            "gamecritic.cli.SHARED_SETTINGS_PATH",
             str(Path(tmpdir) / "cli_settings.json"),
         ):
             keep_running = _run_interactive_command(["set", "concurrency", "8"], settings, output.append)
@@ -260,8 +260,8 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         settings["concurrency"] = 8
         settings["download_covers"] = True
 
-        with patch("metacritic_scraper_py.cli._load_shared_settings", return_value=settings), patch(
-            "metacritic_scraper_py.cli.run_crawl",
+        with patch("gamecritic.cli._load_shared_settings", return_value=settings), patch(
+            "gamecritic.cli.run_crawl",
             return_value=0,
         ) as run_crawl:
             exit_code = main(["crawl"])
@@ -363,7 +363,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
         self.assertTrue(keep_running)
         self.assertTrue(output)
-        self.assertIn("db = data/metacritic.db", output[0])
+        self.assertIn("db = data/gamecritic.db", output[0])
         self.assertIn("SQLite 数据库文件路径", output[0])
 
     def test_show_command_includes_english_explanations(self) -> None:
@@ -384,7 +384,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
         self.assertTrue(keep_running)
         self.assertTrue(output)
-        self.assertIn("db = data/metacritic.db", output[0])
+        self.assertIn("db = data/gamecritic.db", output[0])
         self.assertIn("Path to the SQLite database file", output[0])
 
     def test_clear_command_not_available_by_default(self) -> None:
@@ -408,14 +408,14 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             captured["db"] = getattr(namespace, "db", None)
             emit("[done] exit_code=0")
 
-        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
             keep_running = _run_interactive_command(["clear-db"], settings, output.append)
 
         self.assertTrue(keep_running)
         self.assertEqual(captured.get("func_name"), "run_clear_db")
         self.assertEqual(captured.get("command"), "clear-db")
         self.assertTrue(captured.get("print_summary"))
-        self.assertEqual(captured.get("db"), "data/metacritic.db")
+        self.assertEqual(captured.get("db"), "data/gamecritic.db")
 
     def test_interactive_clear_db_rejects_extra_args(self) -> None:
         settings = _interactive_defaults()
@@ -461,7 +461,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             captured["stop_event"] = getattr(namespace, "stop_event", None)
             emit("[done] exit_code=130")
 
-        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
             keep_running = _run_interactive_command(
                 ["crawl"],
                 settings,
@@ -485,7 +485,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             captured["print_summary"] = getattr(namespace, "print_summary", None)
             emit("[done] exit_code=0")
 
-        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
             keep_running = _run_interactive_command(["sync-slugs"], settings, output.append)
 
         self.assertTrue(keep_running)
@@ -508,7 +508,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             emit("[done] exit_code=0")
 
         stop_event = threading.Event()
-        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
             keep_running = _run_interactive_command(["crawl-reviews"], settings, output.append, stop_event=stop_event)
 
         self.assertTrue(keep_running)
@@ -531,7 +531,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             captured["include_user_reviews"] = getattr(namespace, "include_user_reviews", None)
             emit("[done] exit_code=0")
 
-        with patch("metacritic_scraper_py.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
             keep_running = _run_interactive_command(["crawl-reviews"], settings, output.append)
 
         self.assertTrue(keep_running)
@@ -552,10 +552,10 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         scraper = MagicMock()
         scraper.crawl_from_sitemaps.return_value = CrawlResult(stopped=True)
 
-        with patch("metacritic_scraper_py.cli.SQLiteStorage", return_value=storage), patch(
-            "metacritic_scraper_py.cli._build_client",
+        with patch("gamecritic.cli.SQLiteStorage", return_value=storage), patch(
+            "gamecritic.cli._build_client",
             return_value=client,
-        ), patch("metacritic_scraper_py.cli.MetacriticScraper", return_value=scraper) as scraper_cls:
+        ), patch("gamecritic.cli.MetacriticScraper", return_value=scraper) as scraper_cls:
             exit_code = run_crawl(args)
 
         self.assertEqual(exit_code, 130)
@@ -577,13 +577,13 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         scraper = MagicMock()
         scraper.crawl_from_sitemaps.return_value = CrawlResult(failed_slugs=["demo-a", "demo-b"])
 
-        with patch("metacritic_scraper_py.cli.SQLiteStorage", return_value=storage), patch(
-            "metacritic_scraper_py.cli._maybe_run_auto_sync_slugs_before_crawl",
+        with patch("gamecritic.cli.SQLiteStorage", return_value=storage), patch(
+            "gamecritic.cli._maybe_run_auto_sync_slugs_before_crawl",
             return_value=None,
         ), patch(
-            "metacritic_scraper_py.cli._build_client",
+            "gamecritic.cli._build_client",
             return_value=client,
-        ), patch("metacritic_scraper_py.cli.MetacriticScraper", return_value=scraper), self.assertLogs(
+        ), patch("gamecritic.cli.MetacriticScraper", return_value=scraper), self.assertLogs(
             level="INFO"
         ) as captured:
             exit_code = run_crawl(args)
@@ -599,7 +599,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
     def test_run_crawl_reviews_defaults_to_both_review_types_when_interactive_settings_disable_both(self) -> None:
         args = argparse.Namespace(
-            db="data/metacritic.db",
+            db="data/gamecritic.db",
             include_critic_reviews=False,
             include_user_reviews=False,
             review_page_size=50,
@@ -621,10 +621,10 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         scraper = MagicMock()
         scraper.crawl_reviews_from_games.return_value = CrawlResult()
 
-        with patch("metacritic_scraper_py.cli.SQLiteStorage", return_value=storage), patch(
-            "metacritic_scraper_py.cli._build_client",
+        with patch("gamecritic.cli.SQLiteStorage", return_value=storage), patch(
+            "gamecritic.cli._build_client",
             return_value=client,
-        ), patch("metacritic_scraper_py.cli.MetacriticScraper", return_value=scraper):
+        ), patch("gamecritic.cli.MetacriticScraper", return_value=scraper):
             exit_code = run_crawl_reviews(args)
 
         self.assertEqual(exit_code, 0)
@@ -651,10 +651,10 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         scraper = MagicMock()
         scraper.crawl_reviews_from_games.return_value = CrawlResult(stopped=True)
 
-        with patch("metacritic_scraper_py.cli.SQLiteStorage", return_value=storage), patch(
-            "metacritic_scraper_py.cli._build_client",
+        with patch("gamecritic.cli.SQLiteStorage", return_value=storage), patch(
+            "gamecritic.cli._build_client",
             return_value=client,
-        ), patch("metacritic_scraper_py.cli.MetacriticScraper", return_value=scraper) as scraper_cls:
+        ), patch("gamecritic.cli.MetacriticScraper", return_value=scraper) as scraper_cls:
             exit_code = run_crawl_reviews(args)
 
         self.assertEqual(exit_code, 130)
@@ -679,8 +679,8 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
         client.fetch_binary = _fetch_binary
 
-        with patch("metacritic_scraper_py.cli.SQLiteStorage", return_value=storage), patch(
-            "metacritic_scraper_py.cli._build_client",
+        with patch("gamecritic.cli.SQLiteStorage", return_value=storage), patch(
+            "gamecritic.cli._build_client",
             return_value=client,
         ):
             exit_code = run_download_covers(args)
@@ -700,8 +700,8 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             "sync_state": 1,
         }
 
-        with patch("metacritic_scraper_py.cli._validate_existing_project_db_for_clear", return_value=None), patch(
-            "metacritic_scraper_py.cli.SQLiteStorage",
+        with patch("gamecritic.cli._validate_existing_project_db_for_clear", return_value=None), patch(
+            "gamecritic.cli.SQLiteStorage",
             return_value=storage,
         ), patch("builtins.print") as print_mock:
             exit_code = run_clear_db(args)
@@ -719,7 +719,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             settings["db"] = str(db_path)
             args = _build_clear_db_namespace(settings, print_summary=True)
 
-            with patch("metacritic_scraper_py.cli.logging.error") as error_log:
+            with patch("gamecritic.cli.logging.error") as error_log:
                 exit_code = run_clear_db(args)
 
             self.assertEqual(exit_code, 2)
@@ -742,7 +742,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             settings["db"] = str(db_path)
             args = _build_clear_db_namespace(settings, print_summary=True)
 
-            with patch("metacritic_scraper_py.cli.logging.error") as error_log:
+            with patch("gamecritic.cli.logging.error") as error_log:
                 exit_code = run_clear_db(args)
 
             self.assertEqual(exit_code, 2)
@@ -780,8 +780,8 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             [MagicMock(slug="demo", game_url="https://example.com", sitemap_url="https://example.com/sitemap.xml")]
         )
 
-        with patch("metacritic_scraper_py.cli.SQLiteStorage", return_value=storage), patch(
-            "metacritic_scraper_py.cli._build_client",
+        with patch("gamecritic.cli.SQLiteStorage", return_value=storage), patch(
+            "gamecritic.cli._build_client",
             return_value=client,
         ):
             exit_code = run_sync_slugs(args)
@@ -916,13 +916,13 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(app.invalidated)
 
     def test_style_output_line_for_settings(self) -> None:
-        fragments = _style_output_line("db = data/metacritic.db  # Path to the SQLite database file")
+        fragments = _style_output_line("db = data/gamecritic.db  # Path to the SQLite database file")
         self.assertEqual(
             fragments,
             [
                 ("class:settings.key", "db"),
                 ("", " = "),
-                ("class:settings.value", "data/metacritic.db"),
+                ("class:settings.value", "data/gamecritic.db"),
                 ("class:settings.comment_prefix", "  # "),
                 ("class:settings.comment", "Path to the SQLite database file"),
             ],
@@ -1037,7 +1037,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         output: list[str] = []
         handler = _InteractiveLogHandler(output.append)
         record = logging.LogRecord(
-            name="metacritic_scraper_py.scraper",
+            name="gamecritic.scraper",
             level=logging.INFO,
             pathname=__file__,
             lineno=1,
@@ -1059,8 +1059,8 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         )
 
     def test_style_output_text_preserves_line_breaks(self) -> None:
-        fragments = _style_output_text("metacritic> show\ncrawl summary: games=1 failed=0")
-        self.assertIn(("class:prompt", "metacritic> show"), fragments)
+        fragments = _style_output_text("gamecritic> show\ncrawl summary: games=1 failed=0")
+        self.assertIn(("class:prompt", "gamecritic> show"), fragments)
         self.assertIn(("", "\n"), fragments)
         self.assertIn(("class:summary.label", "crawl summary:"), fragments)
 

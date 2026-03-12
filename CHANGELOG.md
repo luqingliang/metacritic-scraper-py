@@ -33,7 +33,7 @@ and this project follows [Semantic Versioning](https://semver.org/).
 ### Changed
 - `crawl` now reads from stored SQLite slugs by default, separates critic/user review switches, and defaults to concurrency `4`.
 - Interactive mode now exposes slug sync status and supports `sync-slugs`, `export-excel`, and `clear-db` workflows directly.
-- Excel export now defaults to `data/excel/metacritic_export.xlsx`.
+- Excel export now defaults to `data/excel/gamecritic_export.xlsx`.
 
 ### Fixed
 - Crawl progress logs now include per-slug completion counters and clearer stop/failure states.
@@ -48,7 +48,7 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - Interactive welcome/help text now reflects the current stop-capable command set.
-- Package version metadata is now aligned across `pyproject.toml` and `metacritic_scraper_py.__version__`.
+- Package version metadata is now aligned across `pyproject.toml` and `gamecritic.__version__`.
 
 ### Fixed
 - Background stop requests now propagate through the CLI, scraper, HTTP client, and cover download flow.
@@ -124,13 +124,13 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - SQLite-based storage for crawled game data.
 - Core CLI commands for crawling and basic data operations.
 
-[Unreleased]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.8...HEAD
-[0.1.8]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.7...v0.1.8
-[0.1.7]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.6...v0.1.7
-[0.1.6]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.5...v0.1.6
-[0.1.5]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.4...v0.1.5
-[0.1.4]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.3...v0.1.4
-[0.1.3]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/luqingliang/metacritic-scraper-py/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/luqingliang/metacritic-scraper-py/compare/release/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/luqingliang/metacritic-scraper-py/tree/release/v0.1.0
+[Unreleased]: https://github.com/luqingliang/gamecritic/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/luqingliang/gamecritic/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/luqingliang/gamecritic/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/luqingliang/gamecritic/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/luqingliang/gamecritic/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/luqingliang/gamecritic/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/luqingliang/gamecritic/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/luqingliang/gamecritic/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/luqingliang/gamecritic/compare/release/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/luqingliang/gamecritic/tree/release/v0.1.0

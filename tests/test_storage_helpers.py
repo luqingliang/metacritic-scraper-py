@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from metacritic_scraper_py.storage import SQLiteStorage
+from gamecritic.storage import SQLiteStorage
 
 
 class StorageHelpersTestCase(unittest.TestCase):

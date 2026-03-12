@@ -1,6 +1,6 @@
 import unittest
 
-from metacritic_scraper_py.client import slug_from_game_url
+from gamecritic.client import slug_from_game_url
 
 
 class SlugFromUrlTestCase(unittest.TestCase):

@@ -4,8 +4,8 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from metacritic_scraper_py.exporter import export_sqlite_to_excel
-from metacritic_scraper_py.storage import SQLiteStorage
+from gamecritic.exporter import export_sqlite_to_excel
+from gamecritic.storage import SQLiteStorage
 
 
 class ExporterTestCase(unittest.TestCase):

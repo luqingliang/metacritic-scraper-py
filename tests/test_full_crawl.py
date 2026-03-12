@@ -3,9 +3,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from metacritic_scraper_py.client import MetacriticClientError
-from metacritic_scraper_py.scraper import CrawlResult, MetacriticScraper
-from metacritic_scraper_py.storage import SQLiteStorage
+from gamecritic.client import MetacriticClientError
+from gamecritic.scraper import CrawlResult, MetacriticScraper
+from gamecritic.storage import SQLiteStorage
 
 
 class _ClientThatShouldNotListSlugs:
@@ -390,7 +390,7 @@ class FullCrawlSourceTestCase(unittest.TestCase):
                 )
 
                 scraper = MetacriticScraper(_ClientForProgressLogs(), storage)
-                with self.assertLogs("metacritic_scraper_py.scraper", level="INFO") as captured:
+                with self.assertLogs("gamecritic.scraper", level="INFO") as captured:
                     result = scraper.crawl_from_sitemaps(
                         include_critic_reviews=False,
                         include_user_reviews=False,

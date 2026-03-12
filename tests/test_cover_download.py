@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from metacritic_scraper_py.cover_downloader import CoverImageDownloader
-from metacritic_scraper_py.storage import SQLiteStorage
+from gamecritic.cover_downloader import CoverImageDownloader
+from gamecritic.storage import SQLiteStorage
 
 
 class CoverImageDownloaderTestCase(unittest.TestCase):

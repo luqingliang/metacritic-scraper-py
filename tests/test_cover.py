@@ -1,6 +1,6 @@
 import unittest
 
-from metacritic_scraper_py.client import (
+from gamecritic.client import (
     MetacriticClient,
     catalog_image_url_from_bucket_path,
     cover_bucket_path_from_product,

@@ -4,14 +4,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from metacritic_scraper_py.cli import (
+from gamecritic.cli import (
     _build_crawl_namespace,
     _interactive_defaults,
     GAME_SLUGS_LAST_FULL_SYNC_AT_STATE_KEY,
     run_crawl,
 )
-from metacritic_scraper_py.scraper import CrawlResult
-from metacritic_scraper_py.storage import SQLiteStorage
+from gamecritic.scraper import CrawlResult
+from gamecritic.storage import SQLiteStorage
 
 
 class CrawlAutoSyncTestCase(unittest.TestCase):
@@ -41,10 +41,10 @@ class CrawlAutoSyncTestCase(unittest.TestCase):
             scraper = MagicMock()
             scraper.crawl_from_sitemaps.return_value = CrawlResult()
 
-            with patch("metacritic_scraper_py.cli.run_sync_slugs", return_value=0) as sync_mock, patch(
-                "metacritic_scraper_py.cli._build_client",
+            with patch("gamecritic.cli.run_sync_slugs", return_value=0) as sync_mock, patch(
+                "gamecritic.cli._build_client",
                 return_value=client,
-            ), patch("metacritic_scraper_py.cli.MetacriticScraper", return_value=scraper):
+            ), patch("gamecritic.cli.MetacriticScraper", return_value=scraper):
                 exit_code = run_crawl(args)
 
             self.assertEqual(exit_code, 0)
@@ -67,10 +67,10 @@ class CrawlAutoSyncTestCase(unittest.TestCase):
             scraper = MagicMock()
             scraper.crawl_from_sitemaps.return_value = CrawlResult()
 
-            with patch("metacritic_scraper_py.cli.run_sync_slugs", return_value=0) as sync_mock, patch(
-                "metacritic_scraper_py.cli._build_client",
+            with patch("gamecritic.cli.run_sync_slugs", return_value=0) as sync_mock, patch(
+                "gamecritic.cli._build_client",
                 return_value=client,
-            ), patch("metacritic_scraper_py.cli.MetacriticScraper", return_value=scraper):
+            ), patch("gamecritic.cli.MetacriticScraper", return_value=scraper):
                 exit_code = run_crawl(args)
 
             self.assertEqual(exit_code, 0)
@@ -88,10 +88,10 @@ class CrawlAutoSyncTestCase(unittest.TestCase):
             scraper = MagicMock()
             scraper.crawl_from_sitemaps.return_value = CrawlResult()
 
-            with patch("metacritic_scraper_py.cli.run_sync_slugs", return_value=0) as sync_mock, patch(
-                "metacritic_scraper_py.cli._build_client",
+            with patch("gamecritic.cli.run_sync_slugs", return_value=0) as sync_mock, patch(
+                "gamecritic.cli._build_client",
                 return_value=client,
-            ), patch("metacritic_scraper_py.cli.MetacriticScraper", return_value=scraper):
+            ), patch("gamecritic.cli.MetacriticScraper", return_value=scraper):
                 exit_code = run_crawl(args)
 
             self.assertEqual(exit_code, 0)
@@ -105,9 +105,9 @@ class CrawlAutoSyncTestCase(unittest.TestCase):
             self._set_checkpoint(db_path, stale_checkpoint)
             args = self._build_args(db_path)
 
-            with patch("metacritic_scraper_py.cli.run_sync_slugs", return_value=130) as sync_mock, patch(
-                "metacritic_scraper_py.cli._build_client"
-            ) as client_builder, patch("metacritic_scraper_py.cli.MetacriticScraper") as scraper_cls:
+            with patch("gamecritic.cli.run_sync_slugs", return_value=130) as sync_mock, patch(
+                "gamecritic.cli._build_client"
+            ) as client_builder, patch("gamecritic.cli.MetacriticScraper") as scraper_cls:
                 exit_code = run_crawl(args)
 
             self.assertEqual(exit_code, 130)

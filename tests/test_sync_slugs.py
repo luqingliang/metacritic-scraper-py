@@ -4,14 +4,14 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from metacritic_scraper_py.cli import (
+from gamecritic.cli import (
     _build_sync_slugs_namespace,
     _interactive_defaults,
     GAME_SLUGS_LAST_FULL_SYNC_AT_STATE_KEY,
     run_sync_slugs,
 )
-from metacritic_scraper_py.client import GameSlugRecord
-from metacritic_scraper_py.storage import SQLiteStorage
+from gamecritic.client import GameSlugRecord
+from gamecritic.storage import SQLiteStorage
 
 
 class _FakeSlugClient:
@@ -107,7 +107,7 @@ class SyncSlugsCommandTestCase(unittest.TestCase):
             settings["db"] = str(db_path)
             args = _build_sync_slugs_namespace(settings, print_summary=False)
 
-            with patch("metacritic_scraper_py.cli._build_client", return_value=_FakeSlugClient(records)):
+            with patch("gamecritic.cli._build_client", return_value=_FakeSlugClient(records)):
                 exit_code = run_sync_slugs(args)
 
             self.assertEqual(exit_code, 0)
@@ -152,7 +152,7 @@ class SyncSlugsCommandTestCase(unittest.TestCase):
             settings["db"] = str(db_path)
             args = _build_sync_slugs_namespace(settings, print_summary=False)
 
-            with patch("metacritic_scraper_py.cli._build_client", return_value=_FakeSlugClient(records)), self.assertLogs(
+            with patch("gamecritic.cli._build_client", return_value=_FakeSlugClient(records)), self.assertLogs(
                 level="INFO"
             ) as captured:
                 exit_code = run_sync_slugs(args)
@@ -183,7 +183,7 @@ class SyncSlugsCommandTestCase(unittest.TestCase):
             settings["db"] = str(db_path)
             args = _build_sync_slugs_namespace(settings, print_summary=False)
 
-            with patch("metacritic_scraper_py.cli._build_client", return_value=_FakeSlugClient(records)):
+            with patch("gamecritic.cli._build_client", return_value=_FakeSlugClient(records)):
                 exit_code = run_sync_slugs(args)
 
             self.assertEqual(exit_code, 0)
@@ -222,8 +222,8 @@ class SyncSlugsCommandTestCase(unittest.TestCase):
             settings["db"] = str(db_path)
             args = _build_sync_slugs_namespace(settings, print_summary=False)
 
-            with patch("metacritic_scraper_py.cli._build_client", return_value=_FakeSlugClient(records)), patch(
-                "metacritic_scraper_py.cli.DEFAULT_SLUG_SYNC_BATCH_SIZE",
+            with patch("gamecritic.cli._build_client", return_value=_FakeSlugClient(records)), patch(
+                "gamecritic.cli.DEFAULT_SLUG_SYNC_BATCH_SIZE",
                 1,
             ), self.assertLogs(level="INFO") as captured:
                 exit_code = run_sync_slugs(args)

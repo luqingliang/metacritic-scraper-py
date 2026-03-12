@@ -1,4 +1,4 @@
-# metacritic-scraper-py
+# Gamecritic
 
 [English](./README.md)
 
@@ -25,14 +25,14 @@ pip install -U pip
 pip install -e .
 
 # 启动交互模式
-metacritic-scraper
-# 或：metacritic-scraper interactive
+gamecritic
+# 或：gamecritic interactive
 ```
 
 ## CLI Settings
 
 `config/cli_settings.json` 是交互模式和普通 CLI 命令共用的一份共享配置文件。
-你既可以直接手动编辑这个文件，也可以在 `metacritic-scraper interactive`
+你既可以直接手动编辑这个文件，也可以在 `gamecritic interactive`
 里通过 `set <key> <value>` 和 `reset` 这类命令修改同一份配置。
 
 参数说明：
@@ -40,7 +40,7 @@ metacritic-scraper
 ```jsonc
 {
   // SQLite 数据库路径
-  "db": "data/metacritic.db",
+  "db": "data/gamecritic.db",
 
   // 在 `crawl` / `crawl-one` 时抓取媒体评论
   "include_critic_reviews": false,
@@ -79,7 +79,7 @@ metacritic-scraper
   "overwrite_covers": false,
 
   // Excel 导出文件路径
-  "export_output": "data/excel/metacritic_export.xlsx"
+  "export_output": "data/excel/gamecritic_export.xlsx"
 }
 ```
 
@@ -87,49 +87,49 @@ metacritic-scraper
 
 ```bash
 # 抓取单个游戏
-metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild
+gamecritic crawl-one the-legend-of-zelda-breath-of-the-wild
 ```
 
 ```bash
 # 抓取 `game_slugs` 表中的全部 slug
-metacritic-scraper crawl
+gamecritic crawl
 ```
 
 ```bash
 # 为 `games` 表中已保存的游戏补抓评论
-metacritic-scraper crawl-reviews
+gamecritic crawl-reviews
 ```
 
 ```bash
 # 在运行 `crawl` 前进入交互模式开启 `download_covers`
-metacritic-scraper interactive
+gamecritic interactive
 # 然后在交互模式里执行：set download_covers true
 ```
 
 ```bash
 # 在交互模式里修改 `concurrency`，例如设置为 4 个 worker
-metacritic-scraper interactive
+gamecritic interactive
 # 然后在交互模式里执行：set concurrency 4
 ```
 
 ```bash
 # 将 sitemap 中的全部 slug 同步到 SQLite
-metacritic-scraper sync-slugs
+gamecritic sync-slugs
 ```
 
 ```bash
 # 基于已抓取游戏信息批量下载封面图片实体
-metacritic-scraper download-covers
+gamecritic download-covers
 ```
 
 ```bash
 # 导出 SQLite 数据到 Excel
-metacritic-scraper export-excel
+gamecritic export-excel
 ```
 
 ```bash
 # 在保留表结构的前提下一键清空所有业务表
-metacritic-scraper clear-db
+gamecritic clear-db
 ```
 
 ## 数据表结构

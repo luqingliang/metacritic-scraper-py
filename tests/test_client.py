@@ -3,7 +3,7 @@ import unittest
 
 import httpx
 
-from metacritic_scraper_py.client import MetacriticClient
+from gamecritic.client import MetacriticClient
 
 
 class _Response:

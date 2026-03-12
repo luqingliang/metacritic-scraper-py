@@ -35,7 +35,7 @@ GAME_SLUGS_FULL_SYNC_MAX_AGE = timedelta(days=7)
 SHARED_SETTINGS_PATH = "config/cli_settings.json"
 INTERACTIVE_WELCOME_CONTENT_WIDTH = 74
 INTERACTIVE_WELCOME_LABEL_WIDTH = 28
-INTERACTIVE_WELCOME_TITLE = "METACRITIC SCRAPER"
+INTERACTIVE_WELCOME_TITLE = "GAMECRITIC"
 INTERACTIVE_BACKGROUND_COMMANDS = {
     "crawl",
     "crawl-one",
@@ -93,7 +93,7 @@ class _ProgressAwareFormatter(logging.Formatter):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="metacritic-scraper",
+        prog="gamecritic",
         description="Scrape Metacritic game data into SQLite.",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable debug logs.")
@@ -709,7 +709,7 @@ def run_clear_db(args: argparse.Namespace) -> int:
 
 def _interactive_defaults() -> dict[str, object]:
     return {
-        "db": "data/metacritic.db",
+        "db": "data/gamecritic.db",
         "include_critic_reviews": False,
         "include_user_reviews": False,
         "review_page_size": 50,
@@ -722,7 +722,7 @@ def _interactive_defaults() -> dict[str, object]:
         "download_covers": False,
         "covers_dir": "data/covers",
         "overwrite_covers": False,
-        "export_output": "data/excel/metacritic_export.xlsx",
+        "export_output": "data/excel/gamecritic_export.xlsx",
     }
 
 
@@ -966,7 +966,7 @@ def _print_interactive_help() -> str:
         "  exit | quit                       Exit interactive shell",
         "",
         "Examples:",
-        "  set db data/metacritic.db",
+        "  set db data/gamecritic.db",
         "  set concurrency 4",
         "  set download_covers true",
         "  crawl",
@@ -1002,7 +1002,7 @@ def _print_interactive_help_zh() -> str:
         "  crawl-reviews",
         "  sync-slugs",
         "  download-covers",
-        "  export-excel data/excel/metacritic_export.xlsx",
+        "  export-excel data/excel/gamecritic_export.xlsx",
     ]
     return "\n".join(lines)
 
@@ -1062,7 +1062,7 @@ def _format_settings_zh(settings: dict[str, object]) -> str:
 
 
 def _style_output_line(line: str) -> list[tuple[str, str]]:
-    if line.startswith("metacritic>"):
+    if line.startswith("gamecritic>"):
         return [("class:prompt", line)]
 
     if re.match(r"^[a-z]+(?:-[a-z]+)* summary:", line):
@@ -1534,7 +1534,7 @@ def _run_interactive_plain(settings: dict[str, object]) -> int:
         print(line)
     while True:
         try:
-            line = input("metacritic> ").strip()
+            line = input("gamecritic> ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
@@ -1736,7 +1736,7 @@ def run_interactive() -> int:
             while True:
                 try:
                     line = session.prompt(
-                        [("class:prompt", "metacritic> ")],
+                        [("class:prompt", "gamecritic> ")],
                         key_bindings=kb,
                         style=prompt_style,
                         placeholder=lambda: [("class:placeholder", _interactive_help_hint_text())],

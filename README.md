@@ -1,4 +1,4 @@
-# metacritic-scraper-py
+# Gamecritic
 
 [中文说明](./README.zh-CN.md)
 
@@ -25,8 +25,8 @@ pip install -U pip
 pip install -e .
 
 # Start the interactive shell
-metacritic-scraper
-# or: metacritic-scraper interactive
+gamecritic
+# or: gamecritic interactive
 ```
 
 ## CLI Settings
@@ -34,14 +34,14 @@ metacritic-scraper
 `config/cli_settings.json` is the shared settings profile for the interactive shell and the
 regular CLI commands.
 You can edit this file directly, or update the same settings from
-`metacritic-scraper interactive` with commands such as `set <key> <value>` and `reset`.
+`gamecritic interactive` with commands such as `set <key> <value>` and `reset`.
 
 Parameter reference:
 
 ```jsonc
 {
   // SQLite database path
-  "db": "data/metacritic.db",
+  "db": "data/gamecritic.db",
 
   // Fetch critic reviews during `crawl` / `crawl-one`
   "include_critic_reviews": false,
@@ -80,7 +80,7 @@ Parameter reference:
   "overwrite_covers": false,
 
   // Output path for Excel export
-  "export_output": "data/excel/metacritic_export.xlsx"
+  "export_output": "data/excel/gamecritic_export.xlsx"
 }
 ```
 
@@ -88,49 +88,49 @@ Parameter reference:
 
 ```bash
 # Crawl one game
-metacritic-scraper crawl-one the-legend-of-zelda-breath-of-the-wild
+gamecritic crawl-one the-legend-of-zelda-breath-of-the-wild
 ```
 
 ```bash
 # Crawl all stored `game_slugs`
-metacritic-scraper crawl
+gamecritic crawl
 ```
 
 ```bash
 # Backfill reviews for games already stored in `games`
-metacritic-scraper crawl-reviews
+gamecritic crawl-reviews
 ```
 
 ```bash
 # Enable `download_covers` in interactive mode before running `crawl`
-metacritic-scraper interactive
+gamecritic interactive
 # then run inside the interactive shell: set download_covers true
 ```
 
 ```bash
 # Change `concurrency` in interactive mode, for example to 4 workers
-metacritic-scraper interactive
+gamecritic interactive
 # then run inside the interactive shell: set concurrency 4
 ```
 
 ```bash
 # Sync all sitemap slugs into SQLite
-metacritic-scraper sync-slugs
+gamecritic sync-slugs
 ```
 
 ```bash
 # Batch download cover image files from already crawled games
-metacritic-scraper download-covers
+gamecritic download-covers
 ```
 
 ```bash
 # Export SQLite data to Excel
-metacritic-scraper export-excel
+gamecritic export-excel
 ```
 
 ```bash
 # Clear all project tables while keeping the schema
-metacritic-scraper clear-db
+gamecritic clear-db
 ```
 
 ## Data Schema
