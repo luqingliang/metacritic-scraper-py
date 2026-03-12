@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gamecritic.storage import SQLiteStorage
+from gamecritic.storage import SQLiteStorage, load_slug_search_candidates_from_db
 
 
 class StorageHelpersTestCase(unittest.TestCase):
@@ -128,6 +128,48 @@ class StorageHelpersTestCase(unittest.TestCase):
                 )
             finally:
                 storage.close()
+
+    def test_list_slug_search_candidates_prefers_games_title_and_keeps_slug_only_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                storage.upsert_game(
+                    slug="elden-ring",
+                    product_payload={"data": {"item": {"id": 1, "title": "Elden Ring", "platform": "PC"}}},
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url=None,
+                )
+                storage.upsert_game_slugs(
+                    [
+                        (
+                            "elden-ring",
+                            "https://example.com/game/elden-ring",
+                            "https://example.com/games-a.xml",
+                        ),
+                        (
+                            "balatro",
+                            "https://example.com/game/balatro",
+                            "https://example.com/games-b.xml",
+                        ),
+                    ]
+                )
+
+                self.assertEqual(
+                    storage.list_slug_search_candidates(),
+                    [("balatro", None), ("elden-ring", "Elden Ring")],
+                )
+            finally:
+                storage.close()
+
+    def test_load_slug_search_candidates_from_db_does_not_create_missing_db(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "missing.db"
+            self.assertFalse(db_path.exists())
+
+            self.assertEqual(load_slug_search_candidates_from_db(db_path), [])
+            self.assertFalse(db_path.exists())
 
 
 if __name__ == "__main__":

@@ -12,7 +12,9 @@ import sys
 import threading
 from contextlib import contextmanager, redirect_stdout
 from contextvars import ContextVar, copy_context
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from typing import Callable, Sequence
 
 from .client import MetacriticClient
@@ -25,7 +27,7 @@ from .config import (
 from .cover_downloader import CoverImageDownloader
 from .exporter import export_sqlite_to_excel
 from .scraper import MetacriticScraper
-from .storage import APP_TABLE_NAMES, SQLiteStorage
+from .storage import APP_TABLE_NAMES, SQLiteStorage, load_slug_search_candidates_from_db
 
 DEFAULT_QUICKSTART_MAX_REVIEW_PAGES = 1
 DEFAULT_CONCURRENCY = 4
@@ -39,6 +41,7 @@ INTERACTIVE_WELCOME_TITLE = "GAMECRITIC"
 INTERACTIVE_BACKGROUND_COMMANDS = {
     "crawl",
     "crawl-one",
+    "search-slug",
     "crawl-reviews",
     "sync-slugs",
     "download-covers",
@@ -54,6 +57,18 @@ _INT_SETTING_KEYS = {"review_page_size", "concurrency", "max_retries"}
 _FLOAT_SETTING_KEYS = {"timeout", "backoff", "delay"}
 _OPTIONAL_INT_SETTING_KEYS = {"max_review_pages"}
 _STRING_SETTING_KEYS = {"db", "export_output", "covers_dir"}
+_SEARCH_SLUG_AUTO_ACCEPT_SCORE = 0.92
+_SEARCH_SLUG_AMBIGUITY_MARGIN = 0.03
+_SEARCH_SLUG_MIN_SCORE = 0.55
+_SEARCH_SLUG_MAX_CANDIDATES = 5
+
+
+@dataclass(frozen=True)
+class _SlugSearchMatch:
+    slug: str
+    title: str | None
+    score: float
+    matched_by: str
 
 
 def _current_log_command_name() -> str:
@@ -109,6 +124,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Crawl one game by slug using the shared settings profile.",
     )
     crawl_one.add_argument("slug", help="Game slug.")
+    search_slug = subparsers.add_parser(
+        "search-slug",
+        help="Search for the best-matching slug by game name using the local SQLite index.",
+    )
+    search_slug.add_argument("query", nargs="+", help="Game name or partial title.")
     subparsers.add_parser(
         "crawl-reviews",
         help="Backfill critic and user reviews using the shared settings profile.",
@@ -257,6 +277,172 @@ def _maybe_run_auto_sync_slugs_before_crawl(args: argparse.Namespace, storage: S
         logging.warning("sync-slugs before crawl exited with code=%d; crawl aborted", exit_code)
         return exit_code
     return None
+
+
+def _normalize_search_text(value: object) -> str:
+    text = str(value or "").casefold()
+    text = re.sub(r"[_\W]+", " ", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _slug_text(slug: str) -> str:
+    return slug.replace("-", " ").replace("_", " ").strip()
+
+
+def _search_tokens(text: str) -> set[str]:
+    normalized = _normalize_search_text(text)
+    return {token for token in normalized.split(" ") if token}
+
+
+def _text_match_score(query_text: str, candidate_text: str) -> float:
+    normalized_query = _normalize_search_text(query_text)
+    normalized_candidate = _normalize_search_text(candidate_text)
+    if not normalized_query or not normalized_candidate:
+        return 0.0
+    if normalized_query == normalized_candidate:
+        return 1.0
+
+    query_tokens = _search_tokens(normalized_query)
+    candidate_tokens = _search_tokens(normalized_candidate)
+    shared_tokens = query_tokens & candidate_tokens
+    union_tokens = query_tokens | candidate_tokens
+    jaccard = len(shared_tokens) / len(union_tokens) if union_tokens else 0.0
+    coverage = len(shared_tokens) / len(query_tokens) if query_tokens else 0.0
+    sequence_ratio = SequenceMatcher(None, normalized_query, normalized_candidate).ratio()
+
+    score = max(sequence_ratio, jaccard * 0.9, coverage * 0.88)
+    if normalized_candidate.startswith(normalized_query) or normalized_query.startswith(normalized_candidate):
+        score = max(score, 0.9 + (coverage * 0.08))
+    elif normalized_query in normalized_candidate or normalized_candidate in normalized_query:
+        score = max(score, 0.84 + (coverage * 0.08))
+    return min(score, 0.999)
+
+
+def _score_slug_search_candidate(
+    *,
+    query: str,
+    slug: str,
+    title: str | None,
+) -> _SlugSearchMatch | None:
+    normalized_slug = str(slug).strip()
+    if not normalized_slug:
+        return None
+
+    normalized_query = _normalize_search_text(query)
+    slug_query = normalized_query.replace(" ", "-")
+    slug_text = _slug_text(normalized_slug)
+
+    if normalized_query and slug_query == normalized_slug.casefold():
+        return _SlugSearchMatch(slug=normalized_slug, title=title, score=1.0, matched_by="slug")
+
+    title_score = _text_match_score(query, title or "")
+    slug_score = _text_match_score(query, slug_text)
+
+    matched_by = "title"
+    best_score = title_score
+    if slug_score > best_score:
+        matched_by = "slug"
+        best_score = slug_score
+    elif title_score > 0 and slug_score == title_score:
+        matched_by = "title"
+
+    if matched_by == "title" and title:
+        best_score = min(0.999, best_score + 0.01)
+
+    if best_score < _SEARCH_SLUG_MIN_SCORE:
+        return None
+
+    return _SlugSearchMatch(
+        slug=normalized_slug,
+        title=title,
+        score=best_score,
+        matched_by=matched_by,
+    )
+
+
+def _find_slug_search_matches(
+    candidates: Sequence[tuple[str, str | None]],
+    query: str,
+    *,
+    limit: int = _SEARCH_SLUG_MAX_CANDIDATES,
+) -> tuple[list[_SlugSearchMatch], int]:
+    matches: list[_SlugSearchMatch] = []
+    for slug, title in candidates:
+        match = _score_slug_search_candidate(query=query, slug=slug, title=title)
+        if match is not None:
+            matches.append(match)
+
+    matches.sort(
+        key=lambda item: (
+            -item.score,
+            item.title is None,
+            len(item.slug),
+            item.slug,
+        )
+    )
+    total_matches = len(matches)
+    return matches[:max(1, limit)], total_matches
+
+
+def _select_slug_search_match(matches: Sequence[_SlugSearchMatch]) -> _SlugSearchMatch | None:
+    if not matches:
+        return None
+
+    best = matches[0]
+    second = matches[1] if len(matches) > 1 else None
+    if best.score < _SEARCH_SLUG_AUTO_ACCEPT_SCORE:
+        return None
+    if second is None:
+        return best
+    if (best.score - second.score) >= _SEARCH_SLUG_AMBIGUITY_MARGIN:
+        return best
+    return None
+
+
+def _format_search_slug_match(match: _SlugSearchMatch) -> str:
+    details = [f"score={match.score:.3f}", f"matched_by={match.matched_by}"]
+    if match.title:
+        details.insert(0, f"title={match.title}")
+    return f"{match.slug}  # " + " ".join(details)
+
+
+def run_search_slug(args: argparse.Namespace) -> int:
+    query = str(getattr(args, "query", "") or "").strip()
+    if not query:
+        raise SystemExit("search-slug requires a non-empty query")
+
+    logging.info("search-slug querying local database")
+    candidates = load_slug_search_candidates_from_db(args.db)
+
+    logging.info("search-slug matching candidates")
+    matches, total_matches = _find_slug_search_matches(candidates, query)
+
+    logging.info("search-slug selecting result")
+    selected = _select_slug_search_match(matches)
+    if selected is not None:
+        logging.info("search-slug matched slug=%s", selected.slug)
+        print(selected.slug)
+        return 0
+
+    if not matches:
+        logging.info("search-slug no match found")
+        print(
+            f"No slug matched query: {query}\n"
+            "Tip: run 'sync-slugs' first to build the local slug index."
+        )
+        return 2
+
+    if total_matches == 1:
+        logging.info("search-slug no confident match found")
+        print(f"No confident slug match found for query: {query}")
+        print(_format_search_slug_match(matches[0]))
+        return 2
+
+    logging.info("search-slug multiple matches found count=%d", total_matches)
+    print(f"Multiple possible slugs matched query: {query}")
+    for match in matches:
+        print(_format_search_slug_match(match))
+    return 2
 
 
 def run_crawl(args: argparse.Namespace) -> int:
@@ -838,6 +1024,18 @@ def _build_crawl_one_namespace(
     )
 
 
+def _build_search_slug_namespace(
+    settings: dict[str, object],
+    *,
+    query: str,
+) -> argparse.Namespace:
+    return argparse.Namespace(
+        command="search-slug",
+        db=str(settings["db"]),
+        query=query,
+    )
+
+
 def _build_crawl_reviews_namespace(
     settings: dict[str, object],
     *,
@@ -959,6 +1157,7 @@ def _print_interactive_help() -> str:
         "  stop                              Request stop for the current background crawl/download task",
         "  crawl                             Run crawl with current settings",
         "  crawl-one <slug>                  Crawl one game with current settings",
+        "  search-slug <game_name>           Search the best-matching local slug by game name",
         "  crawl-reviews                     Backfill both critic and user reviews for games in SQLite",
         "  download-covers [output_dir]      Download cover image files from DB",
         "  sync-slugs                        Sync sitemap slugs into SQLite",
@@ -973,6 +1172,7 @@ def _print_interactive_help() -> str:
         "  crawl-reviews",
         "  sync-slugs",
         "  download-covers",
+        "  search-slug Elden Ring",
         "  crawl-one the-legend-of-zelda-breath-of-the-wild",
     ]
     return "\n".join(lines)
@@ -989,6 +1189,7 @@ def _print_interactive_help_zh() -> str:
         "  stop                              请求停止当前后台抓取/下载任务",
         "  crawl                             用当前配置执行批量抓取",
         "  crawl-one <slug>                  抓取单个游戏",
+        "  search-slug <game_name>           根据游戏名搜索本地最匹配的 slug",
         "  crawl-reviews                     为 SQLite 中已有游戏补抓媒体和用户评论",
         "  download-covers [output_dir]      基于已抓取数据下载封面图片实体",
         "  sync-slugs                        将 sitemap 中的 slug 同步到 SQLite",
@@ -1002,6 +1203,7 @@ def _print_interactive_help_zh() -> str:
         "  crawl-reviews",
         "  sync-slugs",
         "  download-covers",
+        "  search-slug Elden Ring",
         "  export-excel data/excel/gamecritic_export.xlsx",
     ]
     return "\n".join(lines)
@@ -1166,6 +1368,7 @@ def _interactive_welcome_rows() -> list[tuple[str, str, str | None]]:
         ("item", "stop", "Request stop for the current background crawl/download task"),
         ("item", "crawl", "Run a crawl with the current settings"),
         ("item", "crawl-one <slug>", "Fetch one game immediately"),
+        ("item", "search-slug <game_name>", "Resolve a game name to the best local slug match"),
         ("item", "crawl-reviews", "Backfill reviews for games already stored in SQLite"),
         ("blank", "", None),
         ("section", "Input Tips", None),
@@ -1484,6 +1687,14 @@ def _run_interactive_command(
             _run_with_captured_stdout(run_crawl_one, ns, emit)
             return True
 
+        if cmd == "search-slug":
+            if not args:
+                emit("Usage: search-slug <game_name>")
+                return True
+            ns = _build_search_slug_namespace(settings, query=" ".join(args))
+            _run_with_captured_stdout(run_search_slug, ns, emit)
+            return True
+
         if cmd == "crawl-reviews":
             ns = _build_crawl_reviews_namespace(settings, print_summary=True, stop_event=stop_event)
             _run_with_captured_stdout(run_crawl_reviews, ns, emit)
@@ -1798,6 +2009,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "crawl-one":
         with _logging_command_context(args.command):
             return run_crawl_one(_build_crawl_one_namespace(settings, slug=args.slug))
+    if args.command == "search-slug":
+        with _logging_command_context(args.command):
+            return run_search_slug(_build_search_slug_namespace(settings, query=" ".join(args.query)))
     if args.command == "crawl-reviews":
         with _logging_command_context(args.command):
             return run_crawl_reviews(_build_crawl_reviews_namespace(settings))

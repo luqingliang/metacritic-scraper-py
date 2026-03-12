@@ -20,6 +20,7 @@ from gamecritic.cli import (
     _build_crawl_namespace,
     _build_crawl_reviews_namespace,
     _build_download_covers_namespace,
+    _build_search_slug_namespace,
     _build_sync_slugs_namespace,
     build_parser,
     _convert_setting_value,
@@ -42,6 +43,7 @@ from gamecritic.cli import (
     run_crawl_reviews,
     run_clear_db,
     run_download_covers,
+    run_search_slug,
     run_sync_slugs,
 )
 from gamecritic.client import MetacriticClientError
@@ -272,12 +274,34 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertEqual(dispatched_args.concurrency, 8)
         self.assertTrue(dispatched_args.download_covers)
 
+    def test_main_uses_loaded_shared_settings_for_noninteractive_search_slug(self) -> None:
+        settings = _interactive_defaults()
+        settings["db"] = "data/custom.db"
+
+        with patch("gamecritic.cli._load_shared_settings", return_value=settings), patch(
+            "gamecritic.cli.run_search_slug",
+            return_value=0,
+        ) as run_search_slug_mock:
+            exit_code = main(["search-slug", "Elden", "Ring"])
+
+        self.assertEqual(exit_code, 0)
+        dispatched_args = run_search_slug_mock.call_args.args[0]
+        self.assertEqual(dispatched_args.db, "data/custom.db")
+        self.assertEqual(dispatched_args.query, "Elden Ring")
+
     def test_crawl_one_parser_defaults(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["crawl-one", "demo-game"])
         self.assertEqual(args.command, "crawl-one")
         self.assertEqual(args.slug, "demo-game")
         self.assertEqual(set(vars(args)), {"verbose", "command", "slug"})
+
+    def test_search_slug_parser_defaults(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["search-slug", "Elden", "Ring"])
+        self.assertEqual(args.command, "search-slug")
+        self.assertEqual(args.query, ["Elden", "Ring"])
+        self.assertEqual(set(vars(args)), {"verbose", "command", "query"})
 
     def test_crawl_reviews_parser_defaults(self) -> None:
         parser = build_parser()
@@ -320,6 +344,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertIn("help | help-zh", output[0])
         self.assertIn("show | show-zh", output[0])
         self.assertIn("crawl-reviews", output[0])
+        self.assertIn("search-slug", output[0])
         self.assertIn("clear-db", output[0])
         self.assertIn("请求停止当前后台抓取/下载任务", output[0])
 
@@ -342,6 +367,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertIn("help | help-zh", output[0])
         self.assertIn("show | show-zh", output[0])
         self.assertIn("crawl-reviews", output[0])
+        self.assertIn("search-slug", output[0])
         self.assertIn("clear-db", output[0])
         self.assertIn("current background crawl/download task", output[0])
 
@@ -416,6 +442,34 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertEqual(captured.get("command"), "clear-db")
         self.assertTrue(captured.get("print_summary"))
         self.assertEqual(captured.get("db"), "data/gamecritic.db")
+
+    def test_interactive_search_slug_runs_with_joined_query(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        captured: dict[str, object] = {}
+
+        def _fake_run_with_captured_stdout(func, namespace, emit) -> None:
+            captured["func_name"] = getattr(func, "__name__", "")
+            captured["command"] = getattr(namespace, "command", None)
+            captured["query"] = getattr(namespace, "query", None)
+            emit("[done] exit_code=0")
+
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+            keep_running = _run_interactive_command(["search-slug", "Elden", "Ring"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(captured.get("func_name"), "run_search_slug")
+        self.assertEqual(captured.get("command"), "search-slug")
+        self.assertEqual(captured.get("query"), "Elden Ring")
+
+    def test_interactive_search_slug_requires_query(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+
+        keep_running = _run_interactive_command(["search-slug"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(output, ["Usage: search-slug <game_name>"])
 
     def test_interactive_clear_db_rejects_extra_args(self) -> None:
         settings = _interactive_defaults()
@@ -712,6 +766,154 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         )
         storage.close.assert_called_once()
 
+    def test_run_search_slug_prints_exact_title_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                storage.upsert_game(
+                    slug="elden-ring",
+                    product_payload={"data": {"item": {"id": 1, "title": "Elden Ring", "platform": "PC"}}},
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url=None,
+                )
+            finally:
+                storage.close()
+
+            settings = _interactive_defaults()
+            settings["db"] = str(db_path)
+            args = _build_search_slug_namespace(settings, query="Elden Ring")
+
+            with self.assertLogs(level="INFO") as captured, patch("builtins.print") as print_mock:
+                exit_code = run_search_slug(args)
+
+        self.assertEqual(exit_code, 0)
+        print_mock.assert_called_once_with("elden-ring")
+        messages = [record.getMessage() for record in captured.records]
+        self.assertIn("search-slug querying local database", messages)
+        self.assertIn("search-slug matching candidates", messages)
+        self.assertIn("search-slug selecting result", messages)
+        self.assertIn("search-slug matched slug=elden-ring", messages)
+
+    def test_run_search_slug_prints_candidate_list_when_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                storage.upsert_game(
+                    slug="resident-evil-4",
+                    product_payload={"data": {"item": {"id": 1, "title": "Resident Evil 4", "platform": "PC"}}},
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url=None,
+                )
+                storage.upsert_game(
+                    slug="resident-evil-village",
+                    product_payload={
+                        "data": {"item": {"id": 2, "title": "Resident Evil Village", "platform": "PC"}}
+                    },
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url=None,
+                )
+            finally:
+                storage.close()
+
+            settings = _interactive_defaults()
+            settings["db"] = str(db_path)
+            args = _build_search_slug_namespace(settings, query="Resident Evil")
+
+            with patch("builtins.print") as print_mock:
+                exit_code = run_search_slug(args)
+
+        self.assertEqual(exit_code, 2)
+        printed_lines = [call.args[0] for call in print_mock.call_args_list]
+        self.assertEqual(printed_lines[0], "Multiple possible slugs matched query: Resident Evil")
+        self.assertTrue(any(line.startswith("resident-evil-4  # ") for line in printed_lines[1:]))
+        self.assertTrue(any(line.startswith("resident-evil-village  # ") for line in printed_lines[1:]))
+
+    def test_run_search_slug_does_not_auto_select_same_title_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                storage.upsert_game(
+                    slug="portal",
+                    product_payload={"data": {"item": {"id": 1, "title": "Portal", "platform": "PC"}}},
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url=None,
+                )
+                storage.upsert_game(
+                    slug="portal-remastered",
+                    product_payload={"data": {"item": {"id": 2, "title": "Portal", "platform": "PS5"}}},
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url=None,
+                )
+            finally:
+                storage.close()
+
+            settings = _interactive_defaults()
+            settings["db"] = str(db_path)
+            args = _build_search_slug_namespace(settings, query="Portal")
+
+            with patch("builtins.print") as print_mock:
+                exit_code = run_search_slug(args)
+
+        self.assertEqual(exit_code, 2)
+        printed_lines = [call.args[0] for call in print_mock.call_args_list]
+        self.assertEqual(printed_lines[0], "Multiple possible slugs matched query: Portal")
+        self.assertTrue(any(line.startswith("portal  # ") for line in printed_lines[1:]))
+        self.assertTrue(any(line.startswith("portal-remastered  # ") for line in printed_lines[1:]))
+
+    def test_run_search_slug_prints_low_confidence_single_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                storage.upsert_game(
+                    slug="resident-evil-village",
+                    product_payload={
+                        "data": {"item": {"id": 1, "title": "Resident Evil Village", "platform": "PC"}}
+                    },
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url=None,
+                )
+            finally:
+                storage.close()
+
+            settings = _interactive_defaults()
+            settings["db"] = str(db_path)
+            args = _build_search_slug_namespace(settings, query="RE Village DLC")
+
+            with patch("builtins.print") as print_mock:
+                exit_code = run_search_slug(args)
+
+        self.assertEqual(exit_code, 2)
+        printed_lines = [call.args[0] for call in print_mock.call_args_list]
+        self.assertEqual(printed_lines[0], "No confident slug match found for query: RE Village DLC")
+        self.assertEqual(len(printed_lines), 2)
+        self.assertTrue(printed_lines[1].startswith("resident-evil-village  # "))
+
+    def test_run_search_slug_recommends_sync_when_no_match_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            settings = _interactive_defaults()
+            settings["db"] = str(db_path)
+            args = _build_search_slug_namespace(settings, query="Unknown Game")
+
+            with patch("builtins.print") as print_mock:
+                exit_code = run_search_slug(args)
+
+        self.assertEqual(exit_code, 2)
+        print_mock.assert_called_once_with(
+            "No slug matched query: Unknown Game\nTip: run 'sync-slugs' first to build the local slug index."
+        )
+        self.assertFalse(db_path.exists())
+
     def test_run_clear_db_rejects_missing_db_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "missing.db"
@@ -802,6 +1004,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertIn("help or help-zh", banner_text)
         self.assertIn("crawl/download task", banner_text)
         self.assertIn("crawl-one <slug>", banner_text)
+        self.assertIn("search-slug <game_name>", banner_text)
         self.assertIn("crawl-reviews", banner_text)
         self.assertIn("Up / Down", banner_text)
 
@@ -817,6 +1020,9 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
     def test_crawl_reviews_runs_as_background_interactive_command(self) -> None:
         self.assertIn("crawl-reviews", INTERACTIVE_BACKGROUND_COMMANDS)
+
+    def test_search_slug_runs_as_background_interactive_command(self) -> None:
+        self.assertIn("search-slug", INTERACTIVE_BACKGROUND_COMMANDS)
 
     def test_interactive_game_slugs_status_text_uses_sync_state_update_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
