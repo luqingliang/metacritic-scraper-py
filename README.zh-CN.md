@@ -34,6 +34,7 @@ gamecritic
 `config/cli_settings.json` 是交互模式和普通 CLI 命令共用的一份共享配置文件。
 你既可以直接手动编辑这个文件，也可以在 `gamecritic interactive`
 里通过 `set <key> <value>` 和 `reset` 这类命令修改同一份配置。
+现在除位置参数外，运行参数都统一从这份共享配置读取，不再为每个子命令单独提供一套 CLI 选项。
 
 参数说明：
 
@@ -86,48 +87,30 @@ gamecritic
 ## 常用命令
 
 ```bash
-# 抓取单个游戏
-gamecritic crawl-one the-legend-of-zelda-breath-of-the-wild
-```
-
-```bash
-# 抓取 `game_slugs` 表中的全部 slug
-gamecritic crawl
-```
-
-```bash
-# 为 `games` 表中已保存的游戏补抓评论
-gamecritic crawl-reviews
-```
-
-```bash
-# 在运行 `crawl` 前进入交互模式开启 `download_covers`
+# 进入交互模式
 gamecritic interactive
-# 然后在交互模式里执行：set download_covers true
-```
 
-```bash
-# 在交互模式里修改 `concurrency`，例如设置为 4 个 worker
-gamecritic interactive
-# 然后在交互模式里执行：set concurrency 4
-```
-
-```bash
 # 将 sitemap 中的全部 slug 同步到 SQLite
 gamecritic sync-slugs
-```
 
-```bash
+# 按游戏名称在本地 slug 索引里查找最佳匹配
+gamecritic search-slug "The Legend of Zelda Breath of the Wild"
+
+# 抓取 `game_slugs` 表中的全部 slug
+gamecritic crawl
+
+# 按 slug 抓取单个游戏
+gamecritic crawl-one the-legend-of-zelda-breath-of-the-wild
+
+# 为 `games` 表中已保存的游戏补抓评论
+gamecritic crawl-reviews
+
 # 基于已抓取游戏信息批量下载封面图片实体
 gamecritic download-covers
-```
 
-```bash
 # 导出 SQLite 数据到 Excel
 gamecritic export-excel
-```
 
-```bash
 # 在保留表结构的前提下一键清空所有业务表
 gamecritic clear-db
 ```

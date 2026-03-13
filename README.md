@@ -35,6 +35,8 @@ gamecritic
 regular CLI commands.
 You can edit this file directly, or update the same settings from
 `gamecritic interactive` with commands such as `set <key> <value>` and `reset`.
+All non-positional runtime parameters now come from this shared config file instead of
+per-command CLI flags.
 
 Parameter reference:
 
@@ -87,48 +89,30 @@ Parameter reference:
 ## Common Commands
 
 ```bash
-# Crawl one game
-gamecritic crawl-one the-legend-of-zelda-breath-of-the-wild
-```
-
-```bash
-# Crawl all stored `game_slugs`
-gamecritic crawl
-```
-
-```bash
-# Backfill reviews for games already stored in `games`
-gamecritic crawl-reviews
-```
-
-```bash
-# Enable `download_covers` in interactive mode before running `crawl`
+# Open the interactive shell
 gamecritic interactive
-# then run inside the interactive shell: set download_covers true
-```
 
-```bash
-# Change `concurrency` in interactive mode, for example to 4 workers
-gamecritic interactive
-# then run inside the interactive shell: set concurrency 4
-```
-
-```bash
 # Sync all sitemap slugs into SQLite
 gamecritic sync-slugs
-```
 
-```bash
+# Search the local slug index by game name
+gamecritic search-slug "The Legend of Zelda Breath of the Wild"
+
+# Crawl all stored slugs from `game_slugs`
+gamecritic crawl
+
+# Crawl one game by slug
+gamecritic crawl-one the-legend-of-zelda-breath-of-the-wild
+
+# Backfill reviews for games already stored in `games`
+gamecritic crawl-reviews
+
 # Batch download cover image files from already crawled games
 gamecritic download-covers
-```
 
-```bash
 # Export SQLite data to Excel
 gamecritic export-excel
-```
 
-```bash
 # Clear all project tables while keeping the schema
 gamecritic clear-db
 ```
