@@ -143,6 +143,33 @@ class CoverUrlStorageQueryTestCase(unittest.TestCase):
             finally:
                 storage.close()
 
+    def test_list_game_cover_urls_filters_by_slug(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                storage.upsert_game(
+                    slug="a-game",
+                    product_payload={"data": {"item": {"id": 1, "title": "A"}}},
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url="https://www.metacritic.com/a/img/catalog/provider/1/1/a.jpg",
+                )
+                storage.upsert_game(
+                    slug="b-game",
+                    product_payload={"data": {"item": {"id": 2, "title": "B"}}},
+                    critic_summary_payload=None,
+                    user_summary_payload=None,
+                    cover_url="https://www.metacritic.com/a/img/catalog/provider/1/1/b.jpg",
+                )
+
+                self.assertEqual(
+                    storage.list_game_cover_urls(slug="b-game"),
+                    [("b-game", "https://www.metacritic.com/a/img/catalog/provider/1/1/b.jpg")],
+                )
+            finally:
+                storage.close()
+
 
 if __name__ == "__main__":
     unittest.main()

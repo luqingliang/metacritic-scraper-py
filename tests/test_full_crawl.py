@@ -62,6 +62,24 @@ class FullCrawlStorageSelectionTestCase(unittest.TestCase):
             finally:
                 storage.close()
 
+    def test_list_crawled_game_slugs_filters_by_slug(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                for idx, slug in enumerate(["gamma", "alpha", "beta"], start=1):
+                    storage.upsert_game(
+                        slug=slug,
+                        product_payload={"data": {"item": {"id": idx, "title": slug, "platform": "PC"}}},
+                        critic_summary_payload=None,
+                        user_summary_payload=None,
+                        cover_url=None,
+                    )
+
+                self.assertEqual(storage.list_crawled_game_slugs(slug="beta"), ["beta"])
+            finally:
+                storage.close()
+
 
 class FullCrawlSourceTestCase(unittest.TestCase):
     def test_crawl_from_sitemaps_reads_slugs_from_game_slugs_table(self) -> None:
@@ -141,6 +159,44 @@ class FullCrawlSourceTestCase(unittest.TestCase):
                 self.assertEqual(captured["kwargs"]["max_review_pages"], 1)
                 self.assertEqual(captured["kwargs"]["concurrency"], 1)
                 self.assertTrue(callable(captured["kwargs"]["slug_handler"]))
+            finally:
+                storage.close()
+
+    def test_crawl_reviews_from_games_filters_requested_slug(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            storage = SQLiteStorage(db_path)
+            try:
+                for idx, slug in enumerate(["gamma", "alpha", "beta"], start=1):
+                    storage.upsert_game(
+                        slug=slug,
+                        product_payload={"data": {"item": {"id": idx, "title": slug, "platform": "PC"}}},
+                        critic_summary_payload=None,
+                        user_summary_payload=None,
+                        cover_url=None,
+                    )
+
+                scraper = MetacriticScraper(_ClientThatShouldNotListSlugs(), storage)
+                captured: dict[str, object] = {}
+
+                def _fake_crawl_slugs(slugs, **kwargs):
+                    captured["slugs"] = list(slugs)
+                    captured["kwargs"] = kwargs
+                    return CrawlResult()
+
+                with patch.object(scraper, "_crawl_slugs", side_effect=_fake_crawl_slugs):
+                    scraper.crawl_reviews_from_games(
+                        slug="beta",
+                        include_critic_reviews=True,
+                        include_user_reviews=False,
+                        review_page_size=50,
+                        max_review_pages=1,
+                        concurrency=1,
+                    )
+
+                self.assertEqual(captured["slugs"], ["beta"])
+                self.assertEqual(captured["kwargs"]["include_critic_reviews"], True)
+                self.assertEqual(captured["kwargs"]["include_user_reviews"], False)
             finally:
                 storage.close()
 
