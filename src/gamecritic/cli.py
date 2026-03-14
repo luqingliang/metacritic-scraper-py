@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import random
 import re
 import shlex
 import sqlite3
@@ -50,42 +51,66 @@ INTERACTIVE_BACKGROUND_COMMANDS = {
 }
 INTERACTIVE_STOPPABLE_COMMANDS = {"crawl", "crawl-one", "crawl-reviews", "sync-slugs", "download-covers"}
 INTERACTIVE_HELP_LABEL_WIDTH = 34
-INTERACTIVE_HELP_COMMANDS = (
-    ("crawl", "Run crawl with current settings", "用当前配置执行批量抓取"),
+INTERACTIVE_HELP_TITLE_EN = "Interactive Help"
+INTERACTIVE_HELP_TITLE_ZH = "交互帮助"
+INTERACTIVE_HELP_SUBTITLE_EN = "Run commands directly at the gamecritic> prompt."
+INTERACTIVE_HELP_SUBTITLE_ZH = "在当前 gamecritic> 提示符里直接输入命令。"
+INTERACTIVE_HELP_SECTIONS = (
     (
-        "search-slug <game_name>",
-        "Search the best-matching local slug by game name",
-        "根据游戏名搜索本地最匹配的 slug",
+        "Core Workflow",
+        "主流程",
+        (
+            ("crawl", "Run crawl with current settings", "用当前配置执行批量抓取"),
+            (
+                "search-slug <game_name>",
+                "Search the best-matching local slug by game name",
+                "根据游戏名搜索本地最匹配的 slug",
+            ),
+            ("crawl-one <slug>", "Crawl one game with current settings", "抓取单个游戏"),
+            (
+                "crawl-reviews",
+                "Backfill both critic and user reviews for games in SQLite",
+                "为 SQLite 中已有游戏补抓媒体和用户评论",
+            ),
+            ("sync-slugs", "Sync sitemap slugs into SQLite", "将 sitemap 中的 slug 同步到 SQLite"),
+            (
+                "download-covers [output_dir]",
+                "Download cover image files from DB",
+                "基于已抓取数据下载封面图片实体",
+            ),
+            ("export-excel [output_path]", "Export DB data to Excel", "导出 SQLite 数据到 Excel"),
+        ),
     ),
-    ("crawl-one <slug>", "Crawl one game with current settings", "抓取单个游戏"),
     (
-        "crawl-reviews",
-        "Backfill both critic and user reviews for games in SQLite",
-        "为 SQLite 中已有游戏补抓媒体和用户评论",
+        "Session & Config",
+        "会话与配置",
+        (
+            (
+                "show | show-zh",
+                "Inspect settings with English or Chinese explanations",
+                "查看带英文或中文说明的参数列表",
+            ),
+            ("set <key> <value>", "Update setting (use 'none' for null)", "修改配置（null/none 表示空值）"),
+            ("reset", "Reset settings to defaults", "重置为默认配置"),
+            (
+                "stop",
+                "Request stop for the current background crawl/download task",
+                "请求停止当前后台抓取/下载任务",
+            ),
+        ),
     ),
-    ("sync-slugs", "Sync sitemap slugs into SQLite", "将 sitemap 中的 slug 同步到 SQLite"),
     (
-        "download-covers [output_dir]",
-        "Download cover image files from DB",
-        "基于已抓取数据下载封面图片实体",
+        "Safety & Exit",
+        "帮助与退出",
+        (
+            ("help | help-zh", "Show help in English or Chinese", "显示英文或中文释义帮助"),
+            ("clear-db", "Delete all rows from all SQLite tables", "清空所有 SQLite 业务表中的数据并保留表结构"),
+            ("exit | quit", "Exit interactive shell", "退出交互模式"),
+        ),
     ),
-    ("export-excel [output_path]", "Export DB data to Excel", "导出 SQLite 数据到 Excel"),
-    (
-        "show | show-zh",
-        "Show settings with English or Chinese explanations",
-        "显示带英文或中文说明的参数列表",
-    ),
-    ("set <key> <value>", "Update setting (use 'none' for null)", "修改配置（null/none 表示空值）"),
-    ("reset", "Reset settings to defaults", "重置为默认配置"),
-    (
-        "stop",
-        "Request stop for the current background crawl/download task",
-        "请求停止当前后台抓取/下载任务",
-    ),
-    ("help | help-zh", "Show help in English or Chinese", "显示英文或中文释义帮助"),
-    ("clear-db", "Delete all rows from all SQLite tables", "清空所有 SQLite 业务表中的数据并保留表结构"),
-    ("exit | quit", "Exit interactive shell", "退出交互模式"),
 )
+INTERACTIVE_HELP_EXAMPLES_LABEL_EN = "Examples"
+INTERACTIVE_HELP_EXAMPLES_LABEL_ZH = "示例"
 INTERACTIVE_HELP_EXAMPLES_EN = (
     "crawl",
     "search-slug Elden Ring",
@@ -124,6 +149,7 @@ INTERACTIVE_SETTINGS_DISPLAY_ORDER = (
     "delay",
     "export_output",
 )
+INTERACTIVE_HELP_SAMPLE_SIZE = 3
 LOG_BULLET = "●"
 LOG_FORMAT = f"{LOG_BULLET} %(log_header)s%(progress_display)s - %(message)s"
 _LOG_COMMAND_CONTEXT: ContextVar[str] = ContextVar("log_command_context", default="command")
@@ -1222,16 +1248,20 @@ def _convert_setting_value(key: str, raw_value: str) -> object:
 
 
 def _build_interactive_help_lines(language: str = "en") -> list[str]:
-    heading = "Interactive commands:" if language == "en" else "交互命令（中文释义）:"
-    examples_heading = "Examples:" if language == "en" else "示例:"
+    heading = INTERACTIVE_HELP_TITLE_EN if language == "en" else INTERACTIVE_HELP_TITLE_ZH
+    subtitle = INTERACTIVE_HELP_SUBTITLE_EN if language == "en" else INTERACTIVE_HELP_SUBTITLE_ZH
+    examples_heading = INTERACTIVE_HELP_EXAMPLES_LABEL_EN if language == "en" else INTERACTIVE_HELP_EXAMPLES_LABEL_ZH
     examples = INTERACTIVE_HELP_EXAMPLES_EN if language == "en" else INTERACTIVE_HELP_EXAMPLES_ZH
-    lines = [heading]
-    for command, english, chinese in INTERACTIVE_HELP_COMMANDS:
-        description = english if language == "en" else chinese
-        lines.append(f"  {command.ljust(INTERACTIVE_HELP_LABEL_WIDTH)} {description}")
-    lines.append("")
-    lines.append(examples_heading)
-    lines.extend(f"  {example}" for example in examples)
+    lines = [heading, subtitle, ""]
+    for section_en, section_zh, commands in INTERACTIVE_HELP_SECTIONS:
+        section = section_en if language == "en" else section_zh
+        lines.append(f"[{section}]")
+        for command, english, chinese in commands:
+            description = english if language == "en" else chinese
+            lines.append(f"  {command.ljust(INTERACTIVE_HELP_LABEL_WIDTH)} {description}")
+        lines.append("")
+    lines.append(f"[{examples_heading}]")
+    lines.extend(f"  gamecritic> {example}" for example in _sample_interactive_help_examples(examples))
     return lines
 
 
@@ -1247,6 +1277,14 @@ def _ordered_setting_keys(settings: dict[str, object]) -> list[str]:
     ordered_keys = [key for key in INTERACTIVE_SETTINGS_DISPLAY_ORDER if key in settings]
     ordered_keys.extend(sorted(key for key in settings if key not in INTERACTIVE_SETTINGS_DISPLAY_ORDER))
     return ordered_keys
+
+
+def _sample_interactive_help_examples(examples: Sequence[str]) -> list[str]:
+    if len(examples) <= INTERACTIVE_HELP_SAMPLE_SIZE:
+        return list(examples)
+    sampled_examples = random.sample(list(examples), INTERACTIVE_HELP_SAMPLE_SIZE)
+    example_positions = {example: index for index, example in enumerate(examples)}
+    return sorted(sampled_examples, key=example_positions.__getitem__)
 
 
 def _setting_explanations_en() -> dict[str, str]:
@@ -1389,6 +1427,48 @@ def _style_output_line(line: str) -> list[tuple[str, str]]:
 
 def _style_output_text(text: str) -> list[tuple[str, str]]:
     lines = str(text).split("\n")
+    if lines and lines[0] in {INTERACTIVE_HELP_TITLE_EN, INTERACTIVE_HELP_TITLE_ZH}:
+        fragments: list[tuple[str, str]] = []
+        help_titles = {INTERACTIVE_HELP_TITLE_EN, INTERACTIVE_HELP_TITLE_ZH}
+        help_subtitles = {INTERACTIVE_HELP_SUBTITLE_EN, INTERACTIVE_HELP_SUBTITLE_ZH}
+        for idx, line in enumerate(lines):
+            if idx:
+                fragments.append(("", "\n"))
+            if not line:
+                continue
+            if line in help_titles:
+                fragments.append(("class:help.title", line))
+                continue
+            if line in help_subtitles:
+                fragments.append(("class:help.subtitle", line))
+                continue
+            if re.match(r"^\[[^\]]+\]$", line):
+                fragments.append(("class:help.section", line))
+                continue
+            if line.startswith("  gamecritic> "):
+                fragments.extend(
+                    [
+                        ("", "  "),
+                        ("class:prompt", "gamecritic> "),
+                        ("class:help.example", line[len("  gamecritic> "):]),
+                    ]
+                )
+                continue
+            if line.startswith("  "):
+                label_text = line[2 : 2 + INTERACTIVE_HELP_LABEL_WIDTH]
+                detail_text = line[2 + INTERACTIVE_HELP_LABEL_WIDTH :].lstrip()
+                fragments.extend(
+                    [
+                        ("", "  "),
+                        ("class:help.command", label_text),
+                    ]
+                )
+                if detail_text:
+                    fragments.extend([("", " "), ("class:help.text", detail_text)])
+                continue
+            fragments.append(("", line))
+        return fragments
+
     fragments: list[tuple[str, str]] = []
     for idx, line in enumerate(lines):
         fragments.extend(_style_output_line(line))
@@ -1828,6 +1908,12 @@ def run_interactive() -> int:
     output_style = Style.from_dict(
         {
             "prompt": "bold ansicyan",
+            "help.title": "bold ansibrightcyan",
+            "help.subtitle": "ansibrightblack",
+            "help.section": "bold ansibrightgreen",
+            "help.command": "bold ansiyellow",
+            "help.text": "ansiwhite",
+            "help.example": "ansibrightblue",
             "summary.label": "bold ansibrightgreen",
             "summary.key": "ansibrightgreen",
             "summary.value": "bold ansiwhite",

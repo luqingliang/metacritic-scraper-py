@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 from gamecritic.cli import (
     DEFAULT_CONCURRENCY,
     DEFAULT_QUICKSTART_MAX_REVIEW_PAGES,
+    INTERACTIVE_HELP_EXAMPLES_EN,
+    INTERACTIVE_HELP_SAMPLE_SIZE,
     INTERACTIVE_BACKGROUND_COMMANDS,
     GAME_SLUGS_LAST_FULL_SYNC_AT_STATE_KEY,
     INTERACTIVE_WELCOME_CONTENT_WIDTH,
@@ -34,9 +36,11 @@ from gamecritic.cli import (
     _load_shared_settings,
     _logging_command_context,
     _parse_bool,
+    _print_interactive_help,
     _refresh_interactive_cursor_blink,
     _run_interactive_command,
     _run_with_captured_stdout,
+    _sample_interactive_help_examples,
     _style_output_text,
     _style_output_line,
     main,
@@ -341,7 +345,12 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
         self.assertTrue(keep_running)
         self.assertTrue(output)
-        self.assertIn("交互命令（中文释义）", output[0])
+        self.assertIn("交互帮助", output[0])
+        self.assertIn("在当前 gamecritic> 提示符里直接输入命令。", output[0])
+        self.assertIn("[主流程]", output[0])
+        self.assertIn("[会话与配置]", output[0])
+        self.assertIn("[帮助与退出]", output[0])
+        self.assertIn("[示例]", output[0])
         self.assertIn("help | help-zh", output[0])
         self.assertIn("show | show-zh", output[0])
         self.assertIn("crawl-reviews", output[0])
@@ -356,7 +365,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
         self.assertTrue(keep_running)
         self.assertTrue(output)
-        self.assertIn("交互命令（中文释义）", output[0])
+        self.assertIn("交互帮助", output[0])
 
     def test_help_command_describes_stop_scope(self) -> None:
         settings = _interactive_defaults()
@@ -365,6 +374,12 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
         self.assertTrue(keep_running)
         self.assertTrue(output)
+        self.assertIn("Interactive Help", output[0])
+        self.assertIn("Run commands directly at the gamecritic> prompt.", output[0])
+        self.assertIn("[Core Workflow]", output[0])
+        self.assertIn("[Session & Config]", output[0])
+        self.assertIn("[Safety & Exit]", output[0])
+        self.assertIn("[Examples]", output[0])
         self.assertIn("help | help-zh", output[0])
         self.assertIn("show | show-zh", output[0])
         self.assertIn("crawl-reviews", output[0])
@@ -381,10 +396,12 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(output)
 
         command_labels: list[str] = []
-        for line in output[0].splitlines()[1:]:
+        lines = output[0].splitlines()
+        section_start = lines.index("[Core Workflow]") + 1
+        for line in lines[section_start:]:
             if not line.strip():
                 break
-            command_labels.append(next(part for part in line.strip().split("  ") if part))
+            command_labels.append(line[2:].split("  ", 1)[0].rstrip())
 
         self.assertEqual(
             command_labels,
@@ -396,13 +413,59 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
                 "sync-slugs",
                 "download-covers [output_dir]",
                 "export-excel [output_path]",
+            ],
+        )
+
+    def test_help_command_groups_session_controls_separately(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        keep_running = _run_interactive_command(["help"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertTrue(output)
+
+        command_labels: list[str] = []
+        lines = output[0].splitlines()
+        section_start = lines.index("[Session & Config]") + 1
+        for line in lines[section_start:]:
+            if not line.strip():
+                break
+            command_labels.append(line[2:].split("  ", 1)[0].rstrip())
+
+        self.assertEqual(
+            command_labels,
+            [
                 "show | show-zh",
                 "set <key> <value>",
                 "reset",
                 "stop",
-                "help | help-zh",
-                "clear-db",
-                "exit | quit",
+            ],
+        )
+
+    def test_help_command_shows_three_examples(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        keep_running = _run_interactive_command(["help"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertTrue(output)
+
+        lines = output[0].splitlines()
+        section_start = lines.index("[Examples]") + 1
+        example_lines = [line for line in lines[section_start:] if line.startswith("  gamecritic> ")]
+        self.assertEqual(len(example_lines), INTERACTIVE_HELP_SAMPLE_SIZE)
+
+    def test_sample_interactive_help_examples_preserves_original_order(self) -> None:
+        examples = list(INTERACTIVE_HELP_EXAMPLES_EN)
+        with patch("gamecritic.cli.random.sample", return_value=[examples[5], examples[1], examples[7]]):
+            sampled_examples = _sample_interactive_help_examples(examples)
+
+        self.assertEqual(
+            sampled_examples,
+            [
+                examples[1],
+                examples[5],
+                examples[7],
             ],
         )
 
@@ -1349,6 +1412,13 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertIn(("class:prompt", "gamecritic> show"), fragments)
         self.assertIn(("", "\n"), fragments)
         self.assertIn(("class:summary.label", "crawl summary:"), fragments)
+
+    def test_style_output_text_for_interactive_help(self) -> None:
+        fragments = _style_output_text(_print_interactive_help())
+        self.assertIn(("class:help.title", "Interactive Help"), fragments)
+        self.assertIn(("class:help.section", "[Core Workflow]"), fragments)
+        self.assertIn(("class:prompt", "gamecritic> "), fragments)
+        self.assertTrue(any(style == "class:help.command" and "crawl" in text for style, text in fragments))
 
 
 if __name__ == "__main__":
