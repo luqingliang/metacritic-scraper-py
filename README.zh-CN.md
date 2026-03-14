@@ -102,11 +102,17 @@ gamecritic crawl-one the-legend-of-zelda-breath-of-the-wild
 # 为 `games` 表中已保存的游戏补抓评论
 gamecritic crawl-reviews
 
+# 按 slug 为单个已抓取游戏补抓评论
+gamecritic crawl-reviews the-legend-of-zelda-breath-of-the-wild
+
 # 将 sitemap 中的全部 slug 同步到 SQLite
 gamecritic sync-slugs
 
 # 基于已抓取游戏信息批量下载封面图片实体
 gamecritic download-covers
+
+# 按 slug 下载单个游戏的封面图片实体
+gamecritic download-covers the-legend-of-zelda-breath-of-the-wild
 
 # 导出 SQLite 数据到 Excel
 gamecritic export-excel

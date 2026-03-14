@@ -445,16 +445,25 @@ class SQLiteStorage:
 
     def list_crawled_game_slugs(
         self,
+        *,
+        slug: str | None = None,
     ) -> list[str]:
+        params: tuple[object, ...] = ()
         query = """
             SELECT slug
             FROM games
             WHERE slug IS NOT NULL AND TRIM(slug) != ''
-            ORDER BY slug ASC
         """
+        if slug is not None:
+            normalized_slug = slug.strip()
+            if not normalized_slug:
+                return []
+            query += " AND slug = ?"
+            params = (normalized_slug,)
+        query += " ORDER BY slug ASC"
 
         with self._lock:
-            cursor = self.conn.execute(query)
+            cursor = self.conn.execute(query, params)
             rows = cursor.fetchall()
         return [str(row[0]) for row in rows]
 
@@ -482,16 +491,25 @@ class SQLiteStorage:
 
     def list_game_cover_urls(
         self,
+        *,
+        slug: str | None = None,
     ) -> list[tuple[str, str]]:
+        params: tuple[object, ...] = ()
         query = """
             SELECT slug, cover_url
             FROM games
             WHERE cover_url IS NOT NULL AND TRIM(cover_url) != ''
         """
+        if slug is not None:
+            normalized_slug = slug.strip()
+            if not normalized_slug:
+                return []
+            query += " AND slug = ?"
+            params = (normalized_slug,)
         query += " ORDER BY slug ASC"
 
         with self._lock:
-            cursor = self.conn.execute(query)
+            cursor = self.conn.execute(query, params)
             rows = cursor.fetchall()
         return [(str(row[0]), str(row[1])) for row in rows]
 

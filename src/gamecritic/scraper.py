@@ -386,16 +386,20 @@ class MetacriticScraper:
     def crawl_reviews_from_games(
         self,
         *,
+        slug: str | None = None,
         include_critic_reviews: bool,
         include_user_reviews: bool,
         review_page_size: int,
         max_review_pages: int | None,
         concurrency: int = 4,
     ) -> CrawlResult:
-        review_slugs = self.storage.list_crawled_game_slugs()
+        review_slugs = self.storage.list_crawled_game_slugs(slug=slug)
 
         if not review_slugs:
-            logger.warning("games table is empty or no rows matched; crawl games first")
+            if slug is not None and slug.strip():
+                logger.warning("games table has no matching row for slug=%s; crawl that game first", slug)
+            else:
+                logger.warning("games table is empty or no rows matched; crawl games first")
 
         return self._crawl_slugs(
             review_slugs,

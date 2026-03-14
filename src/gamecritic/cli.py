@@ -68,13 +68,13 @@ INTERACTIVE_HELP_SECTIONS = (
             ),
             ("crawl-one <slug>", "Crawl one game with current settings", "抓取单个游戏"),
             (
-                "crawl-reviews",
+                "crawl-reviews [slug]",
                 "Backfill both critic and user reviews for games in SQLite",
                 "为 SQLite 中已有游戏补抓媒体和用户评论",
             ),
             ("sync-slugs", "Sync sitemap slugs into SQLite", "将 sitemap 中的 slug 同步到 SQLite"),
             (
-                "download-covers [output_dir]",
+                "download-covers [slug]",
                 "Download cover image files from DB",
                 "基于已抓取数据下载封面图片实体",
             ),
@@ -230,9 +230,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Search for the best-matching slug by game name using the local SQLite index.",
     )
     search_slug.add_argument("query", nargs="+", help="Game name or partial title.")
-    subparsers.add_parser(
+    crawl_reviews = subparsers.add_parser(
         "crawl-reviews",
         help="Backfill critic and user reviews using the shared settings profile.",
+    )
+    crawl_reviews.add_argument(
+        "slug",
+        nargs="?",
+        help="Game slug. When omitted, backfill reviews for all crawled games.",
     )
     subparsers.add_parser(
         "sync-slugs",
@@ -242,9 +247,14 @@ def build_parser() -> argparse.ArgumentParser:
         "export-excel",
         help="Export crawled SQLite data using the shared settings profile.",
     )
-    subparsers.add_parser(
+    download_covers = subparsers.add_parser(
         "download-covers",
         help="Download cover image files using the shared settings profile.",
+    )
+    download_covers.add_argument(
+        "slug",
+        nargs="?",
+        help="Game slug. When omitted, download covers for all crawled games.",
     )
     subparsers.add_parser(
         "clear-db",
@@ -693,6 +703,7 @@ def run_crawl_reviews(args: argparse.Namespace) -> int:
         with _build_client(args) as client:
             scraper = MetacriticScraper(client, storage, stop_event=stop_event)
             result = scraper.crawl_reviews_from_games(
+                slug=getattr(args, "slug", None),
                 include_critic_reviews=include_critic_reviews,
                 include_user_reviews=include_user_reviews,
                 review_page_size=args.review_page_size,
@@ -889,11 +900,11 @@ def run_download_covers(args: argparse.Namespace) -> int:
     stop_event = _get_stop_event(args)
     storage = SQLiteStorage(args.db)
     try:
-        rows = storage.list_game_cover_urls()
+        rows = storage.list_game_cover_urls(slug=getattr(args, "slug", None))
         with _build_client(args) as client:
             downloader = CoverImageDownloader(
                 fetch_binary=client.fetch_binary,
-                output_dir=args.output_dir,
+                output_dir=args.covers_dir,
                 overwrite=args.overwrite,
             )
             downloaded = 0
@@ -911,22 +922,22 @@ def run_download_covers(args: argparse.Namespace) -> int:
                         failed += 1
             except InterruptedError:
                 logging.info(
-                    "download-covers stopped total=%d downloaded=%d skipped=%d failed=%d output_dir=%s",
+                    "download-covers stopped total=%d downloaded=%d skipped=%d failed=%d covers_dir=%s",
                     len(rows),
                     downloaded,
                     skipped,
                     failed,
-                    args.output_dir,
+                    args.covers_dir,
                 )
                 return 130
 
         logging.info(
-            "download-covers finished total=%d downloaded=%d skipped=%d failed=%d output_dir=%s",
+            "download-covers finished total=%d downloaded=%d skipped=%d failed=%d covers_dir=%s",
             len(rows),
             downloaded,
             skipped,
             failed,
-            args.output_dir,
+            args.covers_dir,
         )
         return 0 if failed == 0 else 2
     finally:
@@ -1140,11 +1151,13 @@ def _build_search_slug_namespace(
 def _build_crawl_reviews_namespace(
     settings: dict[str, object],
     *,
+    slug: str | None = None,
     print_summary: bool = False,
     stop_event: threading.Event | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         command="crawl-reviews",
+        slug=slug,
         db=str(settings["db"]),
         include_critic_reviews=True,
         include_user_reviews=True,
@@ -1194,14 +1207,14 @@ def _build_export_excel_namespace(
 def _build_download_covers_namespace(
     settings: dict[str, object],
     *,
-    output_dir: str | None = None,
+    slug: str | None = None,
     stop_event: threading.Event | None = None,
 ) -> argparse.Namespace:
-    resolved_output_dir = output_dir if output_dir is not None else str(settings["covers_dir"])
     return argparse.Namespace(
         command="download-covers",
+        slug=slug,
         db=str(settings["db"]),
-        output_dir=resolved_output_dir,
+        covers_dir=str(settings["covers_dir"]),
         overwrite=bool(settings["overwrite_covers"]),
         timeout=float(settings["timeout"]),
         max_retries=int(settings["max_retries"]),
@@ -1486,7 +1499,7 @@ def _interactive_welcome_rows() -> list[tuple[str, str, str | None]]:
         ("item", "crawl", "Run a crawl with the current settings"),
         ("item", "search-slug <game_name>", "Resolve a game name to the best local slug match"),
         ("item", "crawl-one <slug>", "Fetch one game immediately"),
-        ("item", "crawl-reviews", "Backfill reviews for games already stored in SQLite"),
+        ("item", "crawl-reviews [slug]", "Backfill reviews for games already stored in SQLite"),
         ("item", "show", "Inspect the active configuration"),
         ("item", "stop", "Request stop for the current background crawl/download task"),
         ("item", "help or help-zh", "Show English or Chinese help and usage examples"),
@@ -1816,13 +1829,20 @@ def _run_interactive_command(
             return True
 
         if cmd == "crawl-reviews":
-            ns = _build_crawl_reviews_namespace(settings, print_summary=True, stop_event=stop_event)
+            if len(args) > 1:
+                emit("Usage: crawl-reviews [slug]")
+                return True
+            slug = args[0] if args else None
+            ns = _build_crawl_reviews_namespace(settings, slug=slug, print_summary=True, stop_event=stop_event)
             _run_with_captured_stdout(run_crawl_reviews, ns, emit)
             return True
 
         if cmd == "download-covers":
-            output_dir = args[0] if args else settings["covers_dir"]
-            ns = _build_download_covers_namespace(settings, output_dir=str(output_dir), stop_event=stop_event)
+            if len(args) > 1:
+                emit("Usage: download-covers [slug]")
+                return True
+            slug = args[0] if args else None
+            ns = _build_download_covers_namespace(settings, slug=slug, stop_event=stop_event)
             _run_with_captured_stdout(run_download_covers, ns, emit)
             return True
 
@@ -2140,7 +2160,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_search_slug(_build_search_slug_namespace(settings, query=" ".join(args.query)))
     if args.command == "crawl-reviews":
         with _logging_command_context(args.command):
-            return run_crawl_reviews(_build_crawl_reviews_namespace(settings))
+            return run_crawl_reviews(_build_crawl_reviews_namespace(settings, slug=args.slug))
     if args.command == "sync-slugs":
         with _logging_command_context(args.command):
             return run_sync_slugs(_build_sync_slugs_namespace(settings))
@@ -2149,7 +2169,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_export_excel(_build_export_excel_namespace(settings))
     if args.command == "download-covers":
         with _logging_command_context(args.command):
-            return run_download_covers(_build_download_covers_namespace(settings))
+            return run_download_covers(_build_download_covers_namespace(settings, slug=args.slug))
     if args.command == "clear-db":
         with _logging_command_context(args.command):
             return run_clear_db(_build_clear_db_namespace(settings))

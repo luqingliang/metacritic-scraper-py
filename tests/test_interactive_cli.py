@@ -294,6 +294,40 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertEqual(dispatched_args.db, "data/custom.db")
         self.assertEqual(dispatched_args.query, "Elden Ring")
 
+    def test_main_uses_loaded_shared_settings_for_noninteractive_crawl_reviews(self) -> None:
+        settings = _interactive_defaults()
+        settings["db"] = "data/custom.db"
+        settings["concurrency"] = 8
+
+        with patch("gamecritic.cli._load_shared_settings", return_value=settings), patch(
+            "gamecritic.cli.run_crawl_reviews",
+            return_value=0,
+        ) as run_crawl_reviews_mock:
+            exit_code = main(["crawl-reviews", "demo-game"])
+
+        self.assertEqual(exit_code, 0)
+        dispatched_args = run_crawl_reviews_mock.call_args.args[0]
+        self.assertEqual(dispatched_args.db, "data/custom.db")
+        self.assertEqual(dispatched_args.concurrency, 8)
+        self.assertEqual(dispatched_args.slug, "demo-game")
+
+    def test_main_uses_loaded_shared_settings_for_noninteractive_download_covers(self) -> None:
+        settings = _interactive_defaults()
+        settings["db"] = "data/custom.db"
+        settings["covers_dir"] = "data/custom-covers"
+
+        with patch("gamecritic.cli._load_shared_settings", return_value=settings), patch(
+            "gamecritic.cli.run_download_covers",
+            return_value=0,
+        ) as run_download_covers_mock:
+            exit_code = main(["download-covers", "demo-game"])
+
+        self.assertEqual(exit_code, 0)
+        dispatched_args = run_download_covers_mock.call_args.args[0]
+        self.assertEqual(dispatched_args.db, "data/custom.db")
+        self.assertEqual(dispatched_args.covers_dir, "data/custom-covers")
+        self.assertEqual(dispatched_args.slug, "demo-game")
+
     def test_crawl_one_parser_defaults(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["crawl-one", "demo-game"])
@@ -312,13 +346,29 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         parser = build_parser()
         args = parser.parse_args(["crawl-reviews"])
         self.assertEqual(args.command, "crawl-reviews")
-        self.assertEqual(set(vars(args)), {"verbose", "command"})
+        self.assertIsNone(args.slug)
+        self.assertEqual(set(vars(args)), {"verbose", "command", "slug"})
+
+    def test_crawl_reviews_parser_accepts_slug(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["crawl-reviews", "demo-game"])
+        self.assertEqual(args.command, "crawl-reviews")
+        self.assertEqual(args.slug, "demo-game")
+        self.assertEqual(set(vars(args)), {"verbose", "command", "slug"})
 
     def test_download_covers_parser_defaults(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["download-covers"])
         self.assertEqual(args.command, "download-covers")
-        self.assertEqual(set(vars(args)), {"verbose", "command"})
+        self.assertIsNone(args.slug)
+        self.assertEqual(set(vars(args)), {"verbose", "command", "slug"})
+
+    def test_download_covers_parser_accepts_slug(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["download-covers", "demo-game"])
+        self.assertEqual(args.command, "download-covers")
+        self.assertEqual(args.slug, "demo-game")
+        self.assertEqual(set(vars(args)), {"verbose", "command", "slug"})
 
     def test_export_excel_parser_defaults(self) -> None:
         parser = build_parser()
@@ -409,9 +459,9 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
                 "crawl",
                 "search-slug <game_name>",
                 "crawl-one <slug>",
-                "crawl-reviews",
+                "crawl-reviews [slug]",
                 "sync-slugs",
-                "download-covers [output_dir]",
+                "download-covers [slug]",
                 "export-excel [output_path]",
             ],
         )
@@ -608,6 +658,56 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(keep_running)
         self.assertEqual(output, ["Usage: clear-db"])
 
+    def test_interactive_download_covers_uses_settings_covers_dir(self) -> None:
+        settings = _interactive_defaults()
+        settings["covers_dir"] = "data/custom-covers"
+        output: list[str] = []
+        captured: dict[str, object] = {}
+
+        def _fake_run_with_captured_stdout(func, namespace, emit) -> None:
+            captured["func_name"] = getattr(func, "__name__", "")
+            captured["command"] = getattr(namespace, "command", None)
+            captured["covers_dir"] = getattr(namespace, "covers_dir", None)
+            captured["slug"] = getattr(namespace, "slug", None)
+            captured["overwrite"] = getattr(namespace, "overwrite", None)
+            emit("[done] exit_code=0")
+
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+            keep_running = _run_interactive_command(["download-covers"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(captured.get("func_name"), "run_download_covers")
+        self.assertEqual(captured.get("command"), "download-covers")
+        self.assertEqual(captured.get("covers_dir"), "data/custom-covers")
+        self.assertIsNone(captured.get("slug"))
+        self.assertFalse(captured.get("overwrite"))
+
+    def test_interactive_download_covers_accepts_slug(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        captured: dict[str, object] = {}
+
+        def _fake_run_with_captured_stdout(func, namespace, emit) -> None:
+            captured["func_name"] = getattr(func, "__name__", "")
+            captured["slug"] = getattr(namespace, "slug", None)
+            emit("[done] exit_code=0")
+
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+            keep_running = _run_interactive_command(["download-covers", "demo-game"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(captured.get("func_name"), "run_download_covers")
+        self.assertEqual(captured.get("slug"), "demo-game")
+
+    def test_interactive_download_covers_rejects_extra_args(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+
+        keep_running = _run_interactive_command(["download-covers", "demo-game", "extra"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(output, ["Usage: download-covers [slug]"])
+
     def test_stop_command_without_running_background_task(self) -> None:
         settings = _interactive_defaults()
         output: list[str] = []
@@ -683,6 +783,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         def _fake_run_with_captured_stdout(func, namespace, emit) -> None:
             captured["func_name"] = getattr(func, "__name__", "")
             captured["command"] = getattr(namespace, "command", None)
+            captured["slug"] = getattr(namespace, "slug", None)
             captured["include_critic_reviews"] = getattr(namespace, "include_critic_reviews", None)
             captured["include_user_reviews"] = getattr(namespace, "include_user_reviews", None)
             captured["print_summary"] = getattr(namespace, "print_summary", None)
@@ -696,10 +797,37 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertTrue(keep_running)
         self.assertEqual(captured.get("func_name"), "run_crawl_reviews")
         self.assertEqual(captured.get("command"), "crawl-reviews")
+        self.assertIsNone(captured.get("slug"))
         self.assertTrue(captured.get("include_critic_reviews"))
         self.assertTrue(captured.get("include_user_reviews"))
         self.assertTrue(captured.get("print_summary"))
         self.assertIs(captured.get("stop_event"), stop_event)
+
+    def test_interactive_crawl_reviews_accepts_slug(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+        captured: dict[str, object] = {}
+
+        def _fake_run_with_captured_stdout(func, namespace, emit) -> None:
+            captured["func_name"] = getattr(func, "__name__", "")
+            captured["slug"] = getattr(namespace, "slug", None)
+            emit("[done] exit_code=0")
+
+        with patch("gamecritic.cli._run_with_captured_stdout", side_effect=_fake_run_with_captured_stdout):
+            keep_running = _run_interactive_command(["crawl-reviews", "demo-game"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(captured.get("func_name"), "run_crawl_reviews")
+        self.assertEqual(captured.get("slug"), "demo-game")
+
+    def test_interactive_crawl_reviews_rejects_extra_args(self) -> None:
+        settings = _interactive_defaults()
+        output: list[str] = []
+
+        keep_running = _run_interactive_command(["crawl-reviews", "demo-game", "extra"], settings, output.append)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(output, ["Usage: crawl-reviews [slug]"])
 
     def test_interactive_crawl_reviews_ignores_crawl_review_toggle_settings(self) -> None:
         settings = _interactive_defaults()
@@ -811,6 +939,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         scraper.crawl_reviews_from_games.assert_called_once_with(
+            slug=None,
             include_critic_reviews=True,
             include_user_reviews=True,
             review_page_size=50,
@@ -844,6 +973,37 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         scraper.crawl_reviews_from_games.assert_called_once()
         storage.close.assert_called_once()
 
+    def test_run_crawl_reviews_filters_by_slug_when_requested(self) -> None:
+        args = _build_crawl_reviews_namespace(
+            _interactive_defaults(),
+            slug="demo-game",
+            print_summary=False,
+        )
+
+        storage = MagicMock()
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.__exit__.return_value = None
+        scraper = MagicMock()
+        scraper.crawl_reviews_from_games.return_value = CrawlResult()
+
+        with patch("gamecritic.cli.SQLiteStorage", return_value=storage), patch(
+            "gamecritic.cli._build_client",
+            return_value=client,
+        ), patch("gamecritic.cli.MetacriticScraper", return_value=scraper):
+            exit_code = run_crawl_reviews(args)
+
+        self.assertEqual(exit_code, 0)
+        scraper.crawl_reviews_from_games.assert_called_once_with(
+            slug="demo-game",
+            include_critic_reviews=True,
+            include_user_reviews=True,
+            review_page_size=50,
+            max_review_pages=1,
+            concurrency=4,
+        )
+        storage.close.assert_called_once()
+
     def test_run_download_covers_returns_130_when_fetch_is_interrupted(self) -> None:
         args = _build_download_covers_namespace(
             _interactive_defaults(),
@@ -868,6 +1028,29 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
             exit_code = run_download_covers(args)
 
         self.assertEqual(exit_code, 130)
+        storage.list_game_cover_urls.assert_called_once_with(slug=None)
+        storage.close.assert_called_once()
+
+    def test_run_download_covers_filters_by_slug_when_requested(self) -> None:
+        args = _build_download_covers_namespace(
+            _interactive_defaults(),
+            slug="demo-game",
+        )
+
+        storage = MagicMock()
+        storage.list_game_cover_urls.return_value = []
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.__exit__.return_value = None
+
+        with patch("gamecritic.cli.SQLiteStorage", return_value=storage), patch(
+            "gamecritic.cli._build_client",
+            return_value=client,
+        ):
+            exit_code = run_download_covers(args)
+
+        self.assertEqual(exit_code, 0)
+        storage.list_game_cover_urls.assert_called_once_with(slug="demo-game")
         storage.close.assert_called_once()
 
     def test_run_clear_db_prints_summary_and_closes_storage(self) -> None:
@@ -1133,7 +1316,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         self.assertIn("crawl/download task", banner_text)
         self.assertIn("crawl-one <slug>", banner_text)
         self.assertIn("search-slug <game_name>", banner_text)
-        self.assertIn("crawl-reviews", banner_text)
+        self.assertIn("crawl-reviews [slug]", banner_text)
         self.assertIn("Up / Down", banner_text)
 
     def test_interactive_welcome_rows_prioritize_core_commands(self) -> None:
@@ -1144,7 +1327,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
                 "crawl",
                 "search-slug <game_name>",
                 "crawl-one <slug>",
-                "crawl-reviews",
+                "crawl-reviews [slug]",
                 "show",
                 "stop",
                 "help or help-zh",
@@ -1358,7 +1541,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
         )
 
     def test_style_output_line_for_cover_download_log(self) -> None:
-        line = "● download-covers - download-covers finished total=20 downloaded=18 skipped=2 failed=0 output_dir=data/covers"
+        line = "● download-covers - download-covers finished total=20 downloaded=18 skipped=2 failed=0 covers_dir=data/covers"
         fragments = _style_output_line(line)
         self.assertEqual(
             fragments,
@@ -1366,7 +1549,7 @@ class InteractiveCliParsingTestCase(unittest.TestCase):
                 ("class:log.bullet", "● "),
                 (
                     "class:log.cover",
-                    "download-covers - download-covers finished total=20 downloaded=18 skipped=2 failed=0 output_dir=data/covers",
+                    "download-covers - download-covers finished total=20 downloaded=18 skipped=2 failed=0 covers_dir=data/covers",
                 ),
             ],
         )

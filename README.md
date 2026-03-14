@@ -104,11 +104,17 @@ gamecritic crawl-one the-legend-of-zelda-breath-of-the-wild
 # Backfill reviews for games already stored in `games`
 gamecritic crawl-reviews
 
+# Backfill reviews for one crawled game by slug
+gamecritic crawl-reviews the-legend-of-zelda-breath-of-the-wild
+
 # Sync all sitemap slugs into SQLite
 gamecritic sync-slugs
 
 # Batch download cover image files from already crawled games
 gamecritic download-covers
+
+# Download one game's cover image by slug
+gamecritic download-covers the-legend-of-zelda-breath-of-the-wild
 
 # Export SQLite data to Excel
 gamecritic export-excel
